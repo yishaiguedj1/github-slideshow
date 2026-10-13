@@ -19,7 +19,8 @@ from .parse import parse_file
 from .pipeline import messages_by_day, run
 from .settings import load_settings
 from .sheets import build_plan, format_requests
-from .write import load_template, template_month, write_dar, write_pending_json, write_review
+from .write import (load_template, retarget_month, template_month, write_dar, write_pending_json,
+                    write_review)
 
 
 def _date(s: str) -> date:
@@ -53,6 +54,9 @@ def cmd_convert(args) -> int:
 
     rr = run(msgs, start, end, s, ref, corr, ref_path, s.data_dir / "examples.jsonl")
     wb = load_template(template, s)
+    if args.retarget:
+        # no official file for this month at hand: build it from another month's file
+        retarget_month(wb, start.year, start.month)
     y, mth = template_month(wb)
     other = sorted({(d.year, d.month) for d in (start, end)} - {(y, mth)})
     if other:
@@ -178,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--template")
     c.add_argument("--out-dir")
     c.add_argument("--name", help="שם קובץ הפלט")
+    c.add_argument("--retarget", action="store_true",
+                   help="התבנית של חודש אחר: לשנות שמות לשוניות ותאריכים לחודש של הטווח")
     c.set_defaults(func=cmd_convert)
 
     e = sub.add_parser("evaluate", help="השוואה לאקסל אמיתי")

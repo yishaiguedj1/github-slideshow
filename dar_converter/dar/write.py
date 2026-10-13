@@ -50,6 +50,42 @@ def blank_template(wb, first_row: int = 10, last_row: int = 2200) -> None:
             ws[coord].value = None
 
 
+def retarget_month(wb, year: int, month: int) -> None:
+    """Turn a month file into the file of another month (when the official file of that month
+    is not at hand): day tabs renamed (0801 -> 1001), formulas pointing at them rewritten,
+    days the month does not have removed, and the dates in 'Daily Totals' updated."""
+    import calendar
+    n_days = calendar.monthrange(year, month)[1]
+    tabs = sorted(n for n in wb.sheetnames if DAY_SHEET.match(n))
+    if not tabs or int(tabs[0][:2]) == month and template_month(wb) == (year, month):
+        return
+    mapping = {t: (f"{month:02d}{int(t[2:]):02d}" if int(t[2:]) <= n_days else None) for t in tabs}
+    ref = re.compile(r"'?(" + "|".join(tabs) + r")'?!")
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for c in row:
+                v = c.value
+                if isinstance(v, str) and v.startswith("=") and ref.search(v):
+                    if any(mapping[t] is None for t in ref.findall(v)):
+                        c.value = None                       # a day this month does not have
+                    else:
+                        c.value = ref.sub(lambda m: f"'{mapping[m.group(1)]}'!", v)
+    for t in tabs:
+        if mapping[t] is None:
+            wb.remove(wb[t])
+        else:
+            wb[t].title = mapping[t]
+    if "Daily Totals" in wb.sheetnames:
+        ws = wb["Daily Totals"]
+        for d in range(1, 32):
+            cell = ws.cell(d + 1, 2)
+            if d <= n_days:
+                cell.value = datetime(year, month, d)
+            else:
+                for col in range(1, ws.max_column + 1):
+                    ws.cell(d + 1, col).value = None
+
+
 def load_template(path: str | Path, s: Settings, blank: bool = True):
     wb = load_workbook(path)
     if blank:

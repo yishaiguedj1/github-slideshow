@@ -81,3 +81,24 @@ def test_write_keeps_template_and_fills_rows(tmp_path, ref, settings):
     assert ws.cell(10 + esc, 3).comment is not None
     review = openpyxl.load_workbook(tmp_path / "review.xlsx")["שורות לבדיקה"]
     assert any(row[3] == "דרוש תיקון" for row in review.iter_rows(min_row=2, values_only=True))
+
+
+def test_retarget_month_renames_tabs_formulas_and_dates(tmp_path):
+    from dar.write import retarget_month, template_month
+    wb = openpyxl.Workbook()
+    dt = wb.active
+    dt.title = "Daily Totals"
+    for d in range(1, 32):
+        dt.cell(d + 1, 2).value = datetime(2026, 8, d)
+        dt.cell(d + 1, 3).value = "=TOTALS!$F$4"
+    tot = wb.create_sheet("TOTALS")
+    for d in (1, 30, 31):
+        wb.create_sheet(f"08{d:02d}")["A2"] = f"='Daily Totals'!B{d + 1}"
+    tot["C4"] = "=COUNTIFS('0801'!$A$10:$A150,\"Shift 1\")"
+    tot["D4"] = "=COUNTIFS('0831'!$A$10:$A150,\"Shift 1\")"
+    retarget_month(wb, 2026, 9)                       # September has 30 days
+    assert [n for n in wb.sheetnames if n[:2] == "09"] == ["0901", "0930"]
+    assert "0831" not in wb.sheetnames and tot["D4"].value is None
+    assert tot["C4"].value == "=COUNTIFS('0901'!$A$10:$A150,\"Shift 1\")"
+    assert template_month(wb) == (2026, 9) and dt["B31"].value == datetime(2026, 9, 30)
+    assert dt["B32"].value is None and dt["C32"].value is None

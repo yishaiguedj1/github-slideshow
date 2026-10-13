@@ -208,3 +208,8 @@ def test_escort_without_end_closes_at_the_exit_check_in_the_other_zone(ref, sett
     (r,) = rows_of(res, ESCORT)
     assert (r.comment, hm(r.start), hm(r.end)) == ("Escort C2 : Ron Shani", "12:21", "12:35")
     assert r.flags and not r.fix
+
+
+def test_day_without_reports_has_no_assumed_post(ref, settings):
+    res = build(ref, settings, [])
+    assert res.rows == [] and res.roster == []

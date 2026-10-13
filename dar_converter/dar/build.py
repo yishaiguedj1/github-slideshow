@@ -611,11 +611,11 @@ class Builder:
                     if e.kind == "scan":
                         scans[o] += 1
         officers = sorted(span, key=self.ref.priority)
+        if not officers:
+            return []                                  # nobody reported: a day off (weekend, holiday)
         default_sup = self.s.get("roster.default_supervisor")
         if default_sup == "auto":
             default_sup = self.ref.default_supervisor()
-        if not officers and not default_sup:
-            return []
 
         # working hours = the hours of the officer's own reports (07-13 / 13-19 / full day)
         def hours(o: str) -> tuple[int, int]:
