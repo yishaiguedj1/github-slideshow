@@ -58,6 +58,7 @@ class Event:
     inferred: bool = False            # created by a rule, not reported in the chat
     extra_sources: list[Message] = field(default_factory=list)
     info: list[str] = field(default_factory=list)   # documented rule applied (not a warning)
+    single_time: bool = False         # the line gave one time, not a range
 
     def note(self, text: str, confidence: float | None = None) -> None:
         self.notes.append(text)
@@ -82,6 +83,11 @@ class Row:
     seq: int = 0                      # creation order, used as sort tie-breaker
     inferred: bool = False            # row that is not reported in the chat at all
     info: list[str] = field(default_factory=list)   # documented rules applied to this row
+    fix: list[str] = field(default_factory=list)    # needs a human fix - shown prominently
+
+    def need_fix(self, text: str) -> None:
+        if text not in self.fix:
+            self.fix.append(text)
 
     def flag(self, text: str, confidence: float | None = None) -> None:
         if text not in self.flags:

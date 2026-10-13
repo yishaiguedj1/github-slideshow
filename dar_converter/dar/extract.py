@@ -45,7 +45,6 @@ IGNORE_PATTERNS = [re.compile(p) for p in (
 )]
 
 _ZONE = re.compile(r"(?i)(?<![a-z])([cvс])\s?([12])(?!\d)")
-_TLV = re.compile(r"(?i)tlv\s?13")
 _TIME = r"(\d{1,2})(?::(\d{2}))?"
 _EXPR = re.compile(rf"(?<![\d:]){_TIME}(?:\s*-\s*{_TIME})?(?![\d:])")
 _HEBREW_THEN_ZONE = re.compile(r"([֐-׿])([cCvVсС]\s?[12])")
@@ -90,15 +89,27 @@ def preclean(line: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-def split_tokens(line: str) -> tuple[list[str], list[TimeExpr], list[str]]:
+def location_patterns(ref: Reference) -> list[tuple[re.Pattern, str]]:
+    """Location names that contain digits ("bldg 7") must be removed before reading times."""
+    out = []
+    for label, aliases in ref.locations.items():
+        for a in aliases:
+            if label not in ("C1", "C2") and any(ch.isdigit() for ch in a):
+                body = r"\s?".join(re.escape(part) for part in a.split())
+                out.append((re.compile(rf"(?i)(?<![\w]){body}(?![\w])"), label))
+    return out
+
+
+def split_tokens(line: str, loc_patterns=()) -> tuple[list[str], list[TimeExpr], list[str]]:
     """Return (zones, time expressions, remaining words)."""
     zones = []
     for m in _ZONE.finditer(line):
         zones.append("C" + m.group(2))
     s = _ZONE.sub(" ", line)
-    if _TLV.search(s):
-        zones.append("TLV13")
-        s = _TLV.sub(" ", s)
+    for pat, label in loc_patterns:
+        if pat.search(s):
+            zones.append(label)
+            s = pat.sub(" ", s)
     exprs = []
     for m in _EXPR.finditer(s):
         h1, m1, h2, m2 = m.groups()
@@ -117,9 +128,11 @@ def split_tokens(line: str) -> tuple[list[str], list[TimeExpr], list[str]]:
 
 
 class Extractor:
-    def __init__(self, ref: Reference, future_tolerance: int = 2):
+    def __init__(self, ref: Reference, future_tolerance: int = 2, scan_minutes: int = 3):
         self.ref = ref
         self.tol = future_tolerance
+        self.scan_minutes = scan_minutes      # average scan when only one time is given
+        self.loc_patterns = location_patterns(ref)
 
     # ------------------------------------------------------------ public API
     def extract(self, msg: Message) -> list[Event]:
@@ -158,7 +171,7 @@ class Extractor:
     def extract_line(self, msg: Message, line: str, hour_ctx: int | None,
                      sender_officer: str | None) -> list[Event]:
         clean = preclean(line)
-        zones, exprs, words = split_tokens(clean)
+        zones, exprs, words = split_tokens(clean, self.loc_patterns)
         toks = self._classify_words(words)
         kinds = {t[1] for t in toks}
         names = [t for t in toks if t[1] in ("officer", "person", "unknown_name")]
@@ -274,7 +287,8 @@ class Extractor:
         if not e.subjects:
             e.note("לא צוין את מי בדקו", LOW)
         for s in e.subjects:
-            if s == e.actor:
+            # a namesake employee ("אסף") is resolved later from the day's context
+            if s == e.actor and not any(k == "person" for _, k in self.ref.namesakes(s)):
                 e.note("הבודק והנבדק אותו אדם - כנראה אדם אחר עם אותו שם", LOW)
         if len(e.subjects) > 1:
             e.note("כמה נבדקים בשורה אחת", MEDIUM)
@@ -406,7 +420,7 @@ class Extractor:
         return (w, "other", None)
 
     def _names_only(self, line: str) -> list[str]:
-        _, exprs, words = split_tokens(preclean(line))
+        _, exprs, words = split_tokens(preclean(line), self.loc_patterns)
         if exprs:
             return []
         toks = [self._classify(w) for w in words]
@@ -435,7 +449,7 @@ class Extractor:
             return z[0]
         if len(z) > 1:
             return None
-        return location if location in ("Office", "Storage", "TLV13") else None
+        return location if location not in (None, "C1", "C2") else None
 
     # ------------------------------------------------------------ time resolution
     def _msg_minutes(self, e: Event, msg: Message) -> int:
@@ -502,11 +516,22 @@ class Extractor:
         if x.is_range and (end - start > 90 or (x.m2 < x.m1 and x.h1 is None and end - start > 20)):
             e.note(f"טווח זמן חריג ({x.text})", LOW)
             end = None
+            if x.h1 is None and hour_ctx is None:       # keep the start in the message's hour
+                start = (t_msg // 60) * 60 + x.m1
+                if start > t_msg + self.tol:
+                    start -= 60
         if hour_ctx is None and x.h1 is None and x.h2 is None and end is not None \
                 and t_msg - end > 50 and e.day == msg.ts.date():
             e.note("דיווח מאוחר - השעה הוסקה משעת ההודעה", MEDIUM)
-        if not x.is_range and not single_is_point and e.kind in ("check", "scan"):
-            start = end - 1
+        e.single_time = not x.is_range
+        if not x.is_range and not single_is_point and e.kind == "check":
+            start = end - 1                    # builder lengthens it for contractors
+        elif not x.is_range and not single_is_point and e.kind == "scan":
+            # one time on a scan line = its start; an average scan takes a few minutes
+            start, end = end, end + self.scan_minutes
+            if end > t_msg + self.tol:
+                start, end = start - self.scan_minutes, start
+            e.note(f"נמסרה שעה אחת לסריקה - משך ממוצע {self.scan_minutes} דק'", MEDIUM)
         e.start, e.end = start, end
 
 
@@ -514,8 +539,9 @@ def _strip_prefix(k: str) -> str:
     return k[1:] if len(k) > 3 and k[0] in "לוהבמש" else k
 
 
-def extract_all(msgs: list[Message], ref: Reference, future_tolerance: int = 2) -> list[Event]:
-    ex = Extractor(ref, future_tolerance)
+def extract_all(msgs: list[Message], ref: Reference, future_tolerance: int = 2,
+                scan_minutes: int = 3) -> list[Event]:
+    ex = Extractor(ref, future_tolerance, scan_minutes)
     out: list[Event] = []
     for m in msgs:
         out.extend(ex.extract(m))

@@ -20,7 +20,9 @@ day:
 times:
   d_offset_seconds: 60         # D (request) = F - 60s
   e_offset_seconds: 30         # E (dispatch) = F - 30s
-  single_minute: 1             # "44 בדיקה לרון" -> F=43, G=44
+  single_minute: 1             # "44 בדיקה לרון" -> F=43, G=44 (employees and officers)
+  check_minutes_contractor: 2  # one-time check of an escorted visitor / contractor: 2 minutes
+  scan_minutes: 3              # average scan, used when only one time was reported
   future_tolerance: 2          # minutes a reported time may exceed the send time
 
 rules:
@@ -30,7 +32,7 @@ rules:
                                # also: c1_starts_at_c2_end | c2_ends_at_c1_start
   infer_missing_zone: false    # when only C2 was reported: add a flagged C1 row
   infer_missing_zone_minutes: 3
-  merge_scan_and_check_gap: 3  # "37-40 X סרק" + "43 בדיקה לX" -> one pair 37-43
+  merge_scan_and_check_gap: 0  # 0 = keep "37-40 X סרק" and "43 בדיקה לX" as separate rows
   busy_checker_last_minute: false  # checker busy during the scan -> search = last minute
   escort_start_without_time: message_time
 
@@ -49,7 +51,9 @@ validation:
   hole_minutes: 90             # no patrol for this long inside the work day -> flag
 
 review:
-  min_confidence_main: 0.6     # rows below this go to the review file only
+  min_confidence_main: 0       # rows below this are left out of the DAR (0 = write all rows)
+  fix_below: 0.6               # rows below this are marked "דרוש תיקון" (red) in the DAR
+  fix_fill: FFC7CE             # fill colour of rows that need a fix
   cell_notes: true             # add a note on flagged cells in the DAR file
 
 locale:

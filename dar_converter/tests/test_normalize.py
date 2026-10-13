@@ -19,12 +19,12 @@ def test_locations(ref):
     assert ref.location("V2") == "C2"
     assert ref.location("במחסן") == "Storage"
     assert ref.location("מהמשרס") == "Office"   # typo
-    assert ref.location("tlv 13") == "TLV13"
+    assert ref.location("bldg 7") == "BLDG7"
     assert ref.location("חיים") is None
 
 
 def test_sender_mapping(ref):
-    assert ref.sender_officer("נועה - עבודה - Google") == "Noa Bar"
+    assert ref.sender_officer("נועה - עבודה - חברה") == "Noa Bar"
     assert ref.sender_officer("מישהו אחר") is None
 
 

@@ -75,6 +75,9 @@ def test_write_keeps_template_and_fills_rows(tmp_path, ref, settings):
     assert patrol[3] == timedelta(hours=7, minutes=38) and patrol[6] == timedelta(hours=7, minutes=42)
     assert ws["D10"].number_format == "[h]:mm:ss"
     assert ws["C4"].value == 48 and ws["C5"].value == 0
-    assert not any("Escort" in str(r[2]) for r in rows)     # low confidence row not written
+    esc = next(i for i, r in enumerate(rows) if r[2] == "Escort: Foot")   # unknown name
+    assert rows[esc][10].startswith("⚠ דרוש תיקון")           # visible marker, red row, note
+    assert ws.cell(10 + esc, 2).fill.fgColor.rgb.endswith("FFC7CE")
+    assert ws.cell(10 + esc, 3).comment is not None
     review = openpyxl.load_workbook(tmp_path / "review.xlsx")["שורות לבדיקה"]
-    assert any(row[2] == "לא נכתבה" for row in review.iter_rows(min_row=2, values_only=True))
+    assert any(row[3] == "דרוש תיקון" for row in review.iter_rows(min_row=2, values_only=True))

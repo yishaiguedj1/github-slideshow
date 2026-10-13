@@ -20,7 +20,6 @@ DEFAULT_LOCATIONS = {
     "C2": ["c2"],
     "Storage": ["מחסן", "נחסן", "מחס"],
     "Office": ["משרד"],
-    "TLV13": ["tlv13", "tlv 13"],
 }
 
 
@@ -48,9 +47,11 @@ class Reference:
             ref.officers[o["name"]] = {
                 "aliases": [str(a) for a in o.get("aliases", [])],
                 "priority": o.get("shift_priority", 100 + i),
+                "supervisor": bool(o.get("supervisor", False)),
             }
         for p in data.get("people", []) or []:
-            ref.people[p["name"]] = {"aliases": [str(a) for a in p.get("aliases", [])]}
+            ref.people[p["name"]] = {"aliases": [str(a) for a in p.get("aliases", [])],
+                                     "escort": bool(p.get("escort", True))}
             if p.get("default_location"):
                 ref.people[p["name"]]["default_location"] = p["default_location"]
         ref.senders = {str(k): v for k, v in (data.get("senders") or {}).items()}
@@ -67,10 +68,12 @@ class Reference:
 
     def to_dict(self) -> dict:
         return {
-            "officers": [{"name": n, "aliases": v["aliases"], "shift_priority": v["priority"]}
+            "officers": [{"name": n, "aliases": v["aliases"], "shift_priority": v["priority"],
+                          **({"supervisor": True} if v.get("supervisor") else {})}
                          for n, v in sorted(self.officers.items(), key=lambda kv: kv[1]["priority"])],
             "senders": dict(self.senders),
             "people": [{"name": n, "aliases": v["aliases"],
+                        **({"escort": False} if v.get("escort") is False else {}),
                         **({"default_location": v["default_location"]} if v.get("default_location") else {})}
                        for n, v in self.people.items()],
             "locations": self.locations,
@@ -94,7 +97,8 @@ class Reference:
     def add_alias(self, alias: str, name: str, kind: str) -> bool:
         table = self.officers if kind == "officer" else self.people
         if name not in table:
-            table[name] = {"aliases": []} if kind == "person" else {"aliases": [], "priority": 100 + len(table)}
+            table[name] = ({"aliases": [], "escort": True} if kind == "person"
+                           else {"aliases": [], "priority": 100 + len(table), "supervisor": False})
         if alias in table[name]["aliases"]:
             return False
         table[name]["aliases"].append(alias)
@@ -104,6 +108,25 @@ class Reference:
     # ------------------------------------------------------------------ lookups
     def is_officer(self, name: str | None) -> bool:
         return name in self.officers
+
+    def needs_escort(self, person: str | None) -> bool | None:
+        """True for visitors / contractors, False for employees and officers, None if unknown."""
+        if person in self.officers:
+            return False
+        if person in self.people:
+            return self.people[person].get("escort", True)
+        return None
+
+    def is_supervisor(self, officer: str | None) -> bool:
+        return bool(self.officers.get(officer, {}).get("supervisor"))
+
+    def namesakes(self, name: str) -> list[tuple[str, str]]:
+        """Other canonical names that share a Hebrew alias with `name` (e.g. two people called אסף)."""
+        out = []
+        for alias, cands in self._alias.items():
+            if any(c[0] == name for c in cands):
+                out.extend(c for c in cands if c[0] != name and c not in out)
+        return out
 
     def default_location(self, person: str) -> str | None:
         return self.people.get(person, {}).get("default_location")
@@ -116,7 +139,7 @@ class Reference:
             return None
         if sender in self.senders:
             return self.senders[sender]
-        # "נועה - עבודה - Google" -> try the first word(s)
+        # "נועה - עבודה" -> try the first word(s)
         head = re.split(r"\s+-\s+|\s{2,}", sender)[0]
         m = self.lookup_phrase(head, prefer="officer")
         if m and m.kind == "officer":

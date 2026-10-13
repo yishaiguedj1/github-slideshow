@@ -59,8 +59,11 @@ def load_template(path: str | Path, s: Settings, blank: bool = True):
 
 
 def main_rows(res: DayResult, s: Settings) -> list[Row]:
-    th = float(s.get("review.min_confidence_main", 0.6))
+    th = float(s.get("review.min_confidence_main", 0))
     return [r for r in res.rows if r.confidence >= th]
+
+
+DAY_FIX_ISSUES = ("no_supervisor", "roster")
 
 
 def write_dar(wb, results: list[DayResult], s: Settings) -> dict[tuple[date, int], int]:
@@ -69,6 +72,7 @@ def write_dar(wb, results: list[DayResult], s: Settings) -> dict[tuple[date, int
     last = int(s.get("template.last_data_row", 2200))
     notes = bool(s.get("review.cell_notes", True))
     badges = s.get("badges", {}) or {}
+    fix_fill = PatternFill("solid", fgColor=str(s.get("review.fix_fill", "FFC7CE")))
     where: dict[tuple[date, int], int] = {}
     for res in results:
         name = day_sheet_name(res.day)
@@ -86,11 +90,24 @@ def write_dar(wb, results: list[DayResult], s: Settings) -> dict[tuple[date, int
             for col, sec in zip((4, 5, 6, 7), r.times_seconds()):
                 ws.cell(i, col).value = None if sec is None else timedelta(seconds=sec)
             ws.cell(i, 11).value = r.comment
-            if notes and r.flags:
+            if r.fix:
+                # needs a human fix: prominent - red row, note, and a marker if the comment is empty
+                for col in (1, 2, 3, 4, 5, 6, 7, 11):
+                    ws.cell(i, col).fill = fix_fill
+                if not r.comment:
+                    ws.cell(i, 11).value = "⚠ דרוש תיקון: " + r.fix[0]
+                text = "דרוש תיקון:\n" + "\n".join(f"- {f}" for f in r.fix)
+                ws.cell(i, 3).comment = Comment(text, "DAR converter", width=340, height=150)
+            elif notes and r.flags:
                 text = "לבדיקה:\n" + "\n".join(f"- {f}" for f in r.flags)
                 ws.cell(i, 3).comment = Comment(text, "DAR converter", width=320, height=140)
             where[(res.day, r.seq)] = i
             i += 1
+        day_fix = [x.message for x in res.issues if x.kind in DAY_FIX_ISSUES]
+        if day_fix:
+            ws.cell(first, 1).fill = fix_fill
+            ws.cell(first, 1).comment = Comment("דרוש תיקון:\n" + "\n".join(f"- {m}" for m in day_fix),
+                                                "DAR converter", width=340, height=150)
         if any(r.action != "Assumed Post" for r in rows):
             if badges.get("employee") is not None:
                 ws["C4"].value = badges["employee"]
@@ -128,25 +145,29 @@ def write_review(path: str | Path, results: list[DayResult], where: dict, s: Set
     summary = wb.active
     summary.title = "סיכום"
     summary.sheet_view.rightToLeft = True
-    th = float(s.get("review.min_confidence_main", 0.6))
+    th = float(s.get("review.min_confidence_main", 0))
 
     rv = _sheet(wb, "שורות לבדיקה",
-                ["תאריך", "לשונית", "שורה ב-DAR", "ביטחון", "סיבות", "Shift", "Officer", "Action",
+                ["תאריך", "לשונית", "שורה ב-DAR", "מצב", "סיבות", "Shift", "Officer", "Action",
                  "Time Started", "Time Ended", "Comments/Notes", "הודעות מקור"],
-                [11, 8, 10, 8, 45, 9, 18, 18, 11, 11, 42, 70])
+                [11, 8, 10, 14, 45, 9, 18, 18, 11, 11, 42, 70])
+    items = []
     for res in results:
         for r in res.rows:
-            if not r.flags and r.confidence >= th:
+            if not r.flags and not r.fix and r.confidence >= th:
                 continue
             row_no = where.get((res.day, r.seq))
-            _, _, f, g = r.times_seconds()
-            rv.append([res.day.strftime("%d/%m/%Y"), day_sheet_name(res.day),
-                       row_no if row_no else "לא נכתבה", round(r.confidence, 2),
-                       "\n".join(r.flags), r.shift, r.officer, r.action, fmt_seconds(f),
-                       fmt_seconds(g), r.comment, sources_text(r.sources)])
-            fill = FILL_FLAG if row_no else FILL_REVIEW
-            for c in rv[rv.max_row]:
-                c.fill = fill
+            state = "לא נכתבה" if not row_no else ("דרוש תיקון" if r.fix else "לבדיקה")
+            items.append((0 if r.fix or not row_no else 1, res.day, r, row_no, state))
+    for _, day, r, row_no, state in sorted(items, key=lambda x: (x[0], x[1], x[2].seq)):
+        _, _, f, g = r.times_seconds()
+        reasons = r.fix + [x for x in r.flags if x not in r.fix]
+        rv.append([day.strftime("%d/%m/%Y"), day_sheet_name(day), row_no or "", state,
+                   "\n".join(reasons), r.shift, r.officer, r.action, fmt_seconds(f),
+                   fmt_seconds(g), r.comment, sources_text(r.sources)])
+        fill = FILL_REVIEW if state != "לבדיקה" else FILL_FLAG
+        for c in rv[rv.max_row]:
+            c.fill = fill
     _wrap(rv)
 
     iss = _sheet(wb, "בעיות ביום", ["תאריך", "סוג", "תיאור", "הודעות מקור"], [11, 18, 60, 80])
@@ -177,18 +198,18 @@ def write_review(path: str | Path, results: list[DayResult], where: dict, s: Set
     _wrap(ch)
 
     # summary
-    summary.append(["תאריך", "שורות שנכתבו", "שורות עם סימון", "שורות לבדיקה בלבד", "בעיות ביום"])
+    summary.append(["תאריך", "שורות שנכתבו", "דרוש תיקון (אדום)", "לבדיקה (הערה)", "בעיות ביום"])
     for c in summary[1]:
         c.font = Font(bold=True)
         c.fill = FILL_HEAD
     for res in results:
         written = [r for r in res.rows if (res.day, r.seq) in where]
-        flagged = [r for r in written if r.flags]
-        review_only = [r for r in res.rows if (res.day, r.seq) not in where]
-        summary.append([res.day.strftime("%d/%m/%Y"), len(written), len(flagged),
-                        len(review_only), len(res.issues)])
+        fix = [r for r in written if r.fix]
+        flagged = [r for r in written if r.flags and not r.fix]
+        summary.append([res.day.strftime("%d/%m/%Y"), len(written), len(fix), len(flagged),
+                        len(res.issues)])
     summary.append([])
-    summary.append(["צהוב = נכתב לקובץ אבל כדאי לבדוק;  אדום = לא נכתב לקובץ (ביטחון נמוך)."])
+    summary.append(["אדום = מסומן גם בקובץ ה-DAR כ'דרוש תיקון'; צהוב = נכתב עם הערה בתא, כדאי להציץ."])
     summary.append(["תיקונים: data/corrections.yaml (הסבר ב-README). הרצה חוזרת מחילה אותם."])
     for col, w in zip("ABCDE", (12, 14, 16, 18, 12)):
         summary.column_dimensions[col].width = w

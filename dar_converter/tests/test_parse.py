@@ -4,7 +4,7 @@ from dar.parse import parse_lines
 
 ANDROID = """14/01/2024, 9:50 - Messages and calls are end-to-end encrypted. Only people in this chat can read them.
 14/01/2024, 9:50 - ‎‫דנה מנהלת‬‎ created group "סריקות"
-05/08/2026, 7:46 - נועה - עבודה - Google: 39-42 דנה סרקה נועה בדקה c2
+05/08/2026, 7:46 - נועה - עבודה - חברה: 39-42 דנה סרקה נועה בדקה c2
 
 43 נועה בדקה מחסן
 05/08/2026, 9:52 - דנה - עבודה: 50 תחילת ליווי רון c2 <This message was edited>
@@ -18,7 +18,7 @@ def test_android_multiline_system_edited_deleted():
     assert len(msgs) == 6
     assert msgs[0].system and msgs[1].system
     m = msgs[2]
-    assert m.sender == "נועה - עבודה - Google"
+    assert m.sender == "נועה - עבודה - חברה"
     assert m.ts == datetime(2026, 8, 5, 7, 46)
     assert m.text.splitlines() == ["39-42 דנה סרקה נועה בדקה c2", "", "43 נועה בדקה מחסן"]
     assert msgs[3].edited and msgs[3].text == "50 תחילת ליווי רון c2"

@@ -33,7 +33,6 @@ from .models import HIGH, Event, Message
 from .normalize import Reference
 
 EVENT_KINDS = {"scan", "check", "escort_start", "escort_end", "escort_join", "escort_handover"}
-ZONES = {"C1", "C2", "Office", "Storage", "TLV13", None}
 _HHMM = re.compile(r"^\d{1,2}:\d{2}$")
 
 
@@ -76,7 +75,7 @@ def event_problems(ev: dict, ref: Reference) -> list[str]:
         errs.append("חסר end")
     if kind in ("scan", "escort_start", "escort_join") and not ev.get("start"):
         errs.append("חסר start")
-    if ev.get("zone") not in ZONES:
+    if ev.get("zone") not in {"C1", "C2", None, *ref.locations}:
         errs.append(f"zone לא חוקי: {ev.get('zone')}")
     for k in ("actor", "partner"):
         if ev.get(k) and not ref.is_officer(ev[k]):

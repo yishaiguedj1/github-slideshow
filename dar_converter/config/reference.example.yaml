@@ -1,13 +1,15 @@
 # Example reference file (fictional names). Copy to data/reference.yaml and edit.
 # officers: the security team; shift_priority decides Shift 1/2/3 (lowest first).
 # senders:  WhatsApp display name -> officer.
-# people:   visitors / escorted / checked persons as written in the DAR comments.
+# people:   checked / escorted persons as written in the DAR comments
+#           (escort: false = employee who never needs an escort).
 # Hebrew prefixes (ל ו ה ב מ ש) are stripped automatically: "לרון" -> "רון".
 
 officers:
   - name: Dana Cohen
     aliases: [דנה]
     shift_priority: 1
+    supervisor: true             # can be the day's supervisor (Shift 1)
   - name: Avi Levi
     aliases: [אבי]
     shift_priority: 2
@@ -21,7 +23,7 @@ officers:
 senders:
   "דנה - עבודה": Dana Cohen
   "אבי לוי": Avi Levi
-  "נועה - עבודה - Google": Noa Bar
+  "נועה - עבודה - חברה": Noa Bar
   "גיל אמיר": Gil Amir
 
 people:
@@ -29,6 +31,9 @@ people:
     aliases: [רון]
   - name: Tal Peretz
     aliases: [טל]
+  - name: Gil Dror                # employee - no escort; shares the alias גיל with officer Gil Amir
+    aliases: [גיל]
+    escort: false
   - name: Mira Katz
     aliases: [מירה, המנקה]
 
@@ -37,4 +42,4 @@ locations:
   C2: [c2, v2]
   Storage: [מחסן]
   Office: [משרד]
-  TLV13: [tlv13, tlv 13]
+  BLDG7: [bldg7, bldg 7]       # location names may contain digits

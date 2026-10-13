@@ -18,6 +18,7 @@ from .normalize import Reference
 from .parse import parse_file
 from .pipeline import messages_by_day, run
 from .settings import load_settings
+from .sheets import build_plan, format_requests
 from .write import load_template, template_month, write_dar, write_pending_json, write_review
 
 
@@ -68,11 +69,12 @@ def cmd_convert(args) -> int:
     write_pending_json(pending_path, rr.pending, messages_by_day(rr.messages))
 
     n_rows = sum(1 for k in where)
-    n_flag = sum(1 for res in rr.results for r in res.rows if r.flags and (res.day, r.seq) in where)
-    n_review = sum(1 for res in rr.results for r in res.rows if (res.day, r.seq) not in where)
+    n_fix = sum(1 for res in rr.results for r in res.rows if r.fix and (res.day, r.seq) in where)
+    n_flag = sum(1 for res in rr.results for r in res.rows
+                 if r.flags and not r.fix and (res.day, r.seq) in where)
     n_issues = sum(len(res.issues) for res in rr.results)
-    print(f"נכתבו {n_rows} שורות ({n_flag} עם סימון לבדיקה), {n_review} שורות רק בקובץ הבדיקה, "
-          f"{n_issues} בעיות ברמת יום, {len(rr.pending)} שורות צ'אט שלא זוהו.")
+    print(f"נכתבו {n_rows} שורות: {n_fix} מסומנות באדום 'דרוש תיקון', {n_flag} עם הערה לבדיקה. "
+          f"{n_issues} הערות ברמת יום, {len(rr.pending)} שורות צ'אט שלא זוהו.")
     for line in rr.learned:
         print("נלמד:", line)
     print("DAR:    ", dar_path)
@@ -92,7 +94,7 @@ def cmd_evaluate(args) -> int:
             d += timedelta(days=1)
     actual_path = Path(args.actual) if args.actual else s.path("template")
     rr = run(msgs, min(days), max(days), s, ref, corr)
-    th = float(s.get("review.min_confidence_main", 0.6))
+    th = float(s.get("review.min_confidence_main", 0))
     pred = {res.day: [r for r in res.rows if r.confidence >= th] for res in rr.results}
     actual = load_actual(actual_path, days)
     fields = tuple(args.fields.split(",")) if args.fields else FIELDS
@@ -113,6 +115,40 @@ def cmd_pending(args) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     write_pending_json(out, rr.pending, messages_by_day(rr.messages))
     print(f"{len(rr.pending)} שורות שלא זוהו -> {out}")
+    return 0
+
+
+def cmd_sheets_plan(args) -> int:
+    import json
+    s, msgs, ref, corr, ref_path = _load(args)
+    rr = run(msgs, args.date_from, args.date_to, s, ref, corr, ref_path)
+    existing = {}
+    if args.existing:
+        with open(args.existing, encoding="utf-8") as fh:
+            existing = json.load(fh)
+    plan = build_plan(rr.results, s, existing, args.tab_format)
+    out = Path(args.out) if args.out else s.data_dir / s.get("paths.out_dir", "out") / \
+        f"sheets_plan_{args.date_from}_{args.date_to}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", encoding="utf-8") as fh:
+        json.dump(plan, fh, ensure_ascii=False, indent=1)
+    n_rows = sum(len(t["values"][0]["values"]) for t in plan["tabs"])
+    n_fix = sum(len(t["fix_rows"]) for t in plan["tabs"])
+    print(f"{len(plan['tabs'])} לשוניות, {n_rows} שורות ({n_fix} דרוש תיקון) -> {out}")
+    return 0
+
+
+def cmd_sheets_requests(args) -> int:
+    import json
+    s = load_settings(args.settings)
+    with open(args.plan, encoding="utf-8") as fh:
+        plan = json.load(fh)
+    with open(args.sheet_ids, encoding="utf-8") as fh:
+        ids = {k: int(v) for k, v in json.load(fh).items()}
+    reqs = format_requests(plan, ids, str(s.get("review.fix_fill", "FFC7CE")))
+    with open(args.out, "w", encoding="utf-8") as fh:
+        json.dump({"requests": reqs}, fh, ensure_ascii=False)
+    print(f"{len(reqs)} בקשות עיצוב -> {args.out}")
     return 0
 
 
@@ -152,6 +188,22 @@ def main(argv: list[str] | None = None) -> int:
     pnd.add_argument("--to", dest="date_to", type=_date, required=True)
     pnd.add_argument("--out")
     pnd.set_defaults(func=cmd_pending)
+
+    sp = sub.add_parser("sheets-plan", help="תוכנית כתיבה לגוגל שייטס (עותק של הקובץ הרשמי)")
+    _common(sp)
+    sp.add_argument("--from", dest="date_from", type=_date, required=True)
+    sp.add_argument("--to", dest="date_to", type=_date, required=True)
+    sp.add_argument("--existing", help="JSON {tab: [[A..L], ...]} - הערכים שכבר בקובץ (שורות מוקד)")
+    sp.add_argument("--tab-format", default="%m/%d", help="שם לשונית יום (ברירת מחדל 08/05)")
+    sp.add_argument("--out")
+    sp.set_defaults(func=cmd_sheets_plan)
+
+    sr = sub.add_parser("sheets-requests", help="בקשות עיצוב (אדום + הערות) לפי sheetId")
+    sr.add_argument("--settings")
+    sr.add_argument("--plan", required=True)
+    sr.add_argument("--sheet-ids", required=True, help='JSON {"08/05": 123456, ...}')
+    sr.add_argument("--out", required=True)
+    sr.set_defaults(func=cmd_sheets_requests)
 
     lr = sub.add_parser("learn", help="הוספת כינויים מקובץ התיקונים לרשימות")
     _common(lr)

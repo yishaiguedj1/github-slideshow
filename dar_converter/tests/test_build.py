@@ -36,12 +36,29 @@ def test_far_apart_zones_are_not_joined(ref, settings):
     assert [(hm(r.start), hm(r.end)) for r in rows_of(res, PATROL)] == [("12:17", "12:20"), ("12:24", "12:27")]
 
 
-def test_solo_scan_and_following_check_merge(ref, settings):
+def test_scan_and_later_check_stay_separate(ref, settings):
     res = build(ref, settings, [msg("11:53", NOA, "50-53 נועה סרקה c2"),
                                 msg("11:55", DANA, "54-55 בדיקה לנועה C2")])
     (p,), (s,) = rows_of(res, PATROL), rows_of(res, SEARCH)
-    assert (p.officer, hm(p.start), hm(p.end)) == ("Noa Bar", "11:50", "11:55")
-    assert (s.officer, s.comment) == ("Dana Cohen", "Metal screening C2 : Noa Bar - Declined to sit")
+    assert (p.officer, hm(p.start), hm(p.end)) == ("Noa Bar", "11:50", "11:53")
+    assert (s.officer, hm(s.start), hm(s.end), s.comment) == \
+        ("Dana Cohen", "11:54", "11:55", "Metal screening C2 : Noa Bar - Declined to sit")
+
+
+def test_scan_start_only_gets_average_length(ref, settings):
+    res = build(ref, settings, [msg("12:43", NOA, "42 תחילת סריקה נועה c2"),
+                                msg("12:48", AVI, "48-c2-בדיקה לנועה")])
+    (p,), (s,) = rows_of(res, PATROL), rows_of(res, SEARCH)
+    assert (hm(p.start), hm(p.end)) == ("12:42", "12:45") and p.flags
+    assert (s.officer, hm(s.start), hm(s.end)) == ("Avi Levi", "12:47", "12:48")
+
+
+def test_contractor_check_takes_two_minutes(ref, settings):
+    res = build(ref, settings, [msg("11:50", NOA, "50 בדיקה לרון c2"),       # visitor (escorted)
+                                msg("11:52", NOA, "52 בדיקה לגיל c2")])      # employee / officer
+    s1, s2 = rows_of(res, SEARCH)
+    assert (hm(s1.start), hm(s1.end)) == ("11:48", "11:50")
+    assert (hm(s2.start), hm(s2.end)) == ("11:51", "11:52")
 
 
 def test_zone_inferred_from_the_other_half_of_the_round(ref, settings):
@@ -80,17 +97,38 @@ def test_same_minute_escort_gets_one_minute(ref, settings):
     assert (hm(r.start), hm(r.end)) == ("09:05", "09:06")
 
 
-def test_roster_priorities_and_assumed_post(ref, settings):
+def test_supervisor_is_shift_1_and_others_by_priority(ref, settings):
     res = build(ref, settings, [msg("07:46", NOA, "39-42 גיל סרק נועה בדקה c2"),
-                                msg("10:10", DANA, "05-08 אבי סרק דנה בדקה c1")])
+                                msg("17:46", NOA, "39-42 גיל סרק נועה בדקה c2"),
+                                msg("10:10", DANA, "05-08 אבי סרק דנה בדקה c1"),
+                                msg("17:10", DANA, "05-08 אבי סרק דנה בדקה c1")])
     ap = [(r.shift, r.officer, hm(r.start), hm(r.end)) for r in rows_of(res, ASSUMED_POST)]
     assert ap == [("Shift 1", "Dana Cohen", "07:00", "19:00"), ("Shift 2", "Avi Levi", "07:00", "19:00"),
                   ("Shift 3", "Noa Bar", "07:00", "19:00"), (None, "Gil Amir", "07:00", "19:00")]
-    # Gil is a 4th officer that does not fit a split post -> no shift, flagged, day issue
+    # Gil is a 4th full-day officer: no free post -> marked for a fix, day issue
     gil = [r for r in res.rows if r.officer == "Gil Amir"]
-    assert all(r.shift is None and r.flags for r in gil)
+    assert all(r.shift is None and r.fix for r in gil)
     assert any("Gil Amir" in i.message for i in res.issues)
     assert res.rows[0].action == ASSUMED_POST and res.rows[0].d_e_f[0] == 7 * 3600
+
+
+def test_no_supervisor_in_chat_leaves_shift_1_empty(ref, settings):
+    res = build(ref, settings, [msg("07:46", NOA, "39-42 אבי סרק נועה בדקה c2"),
+                                msg("17:46", NOA, "39-42 אבי סרק נועה בדקה c2")])
+    ap = [(r.shift, r.officer) for r in rows_of(res, ASSUMED_POST)]
+    assert ap == [("Shift 2", "Avi Levi"), ("Shift 3", "Noa Bar")]
+    assert any(i.kind == "no_supervisor" for i in res.issues)
+
+
+def test_namesake_employee_vs_officer(ref, settings):
+    # Gil Amir (officer) is on duty and just scanned -> "בדיקה לגיל" is the officer;
+    # later, a check of "גיל" that Gil himself sends is the employee Gil Dror.
+    res = build(ref, settings, [msg("10:10", NOA, "05-08 גיל סרק c2"),
+                                msg("10:10", NOA, "09 בדיקה לגיל c2"),
+                                msg("15:10", GIL, "09 בדיקה לגיל c1")])
+    comments = [r.comment for r in rows_of(res, SEARCH)]
+    assert comments == ["Metal screening C2 : Gil Amir - Declined to sit",
+                        "Metal screening C1 : Gil Dror - Declined to sit"]
 
 
 def test_split_post_07_13_and_13_19(ref, settings):
@@ -109,10 +147,15 @@ def test_holiday_ends_at_14(ref, settings):
     assert {hm(r.end) for r in rows_of(res, ASSUMED_POST)} == {"14:00"}
 
 
-def test_unknown_person_goes_to_review_but_known_one_stays(ref, settings):
+def test_unknown_person_is_marked_for_fix_but_known_one_is_clean(ref, settings):
     res = build(ref, settings, [msg("15:49", DANA, "49 תחילת ליווי צביקה ורון במשרד"),
                                 msg("16:12", DANA, "12 סיום ליווי במשרד")])
     esc = {r.comment: r for r in rows_of(res, ESCORT)}
-    assert esc["Escort Office : Ron Shani"].confidence == 1.0
+    assert esc["Escort Office : Ron Shani"].confidence == 1.0 and not esc["Escort Office : Ron Shani"].fix
     unknown = esc[None]
-    assert unknown.confidence < 0.6 and any("צביקה" in f for f in unknown.flags)
+    assert unknown.confidence < 0.6 and any("צביקה" in f for f in unknown.fix)
+
+
+def test_one_zone_with_checker_is_marked(ref, settings):
+    res = build(ref, settings, [msg("13:51", NOA, "48-51 אבי סרק נועה בדקה c2")])
+    assert all(any("C1" in f for f in r.fix) for r in rows_of(res, PATROL) + rows_of(res, SEARCH))

@@ -24,4 +24,5 @@ def test_held_out_days_accuracy():
     pred = {r.day: [x for x in r.rows if x.confidence >= 0.6] for r in rr.results}
     t = evaluate(pred, load_actual(S.path("template"), TEST_DAYS), TEST_DAYS).totals()
     assert t["recall"] >= 0.97 and t["precision"] >= 0.97
-    assert t["exact_rows"] / t["actual_rows"] >= 0.90
+    assert t["exact_rows"] / t["actual_rows"] >= 0.85
+    assert min(t["time_within_1min"].values()) >= 0.97

@@ -9,7 +9,7 @@
     "kind": {"enum": ["scan", "check", "escort_start", "escort_end", "escort_join", "escort_handover"]},
     "start": {"type": "string", "pattern": "^\\d{1,2}:\\d{2}$"},
     "end": {"type": ["string", "null"], "pattern": "^\\d{1,2}:\\d{2}$"},
-    "zone": {"enum": ["C1", "C2", "Office", "Storage", "TLV13", null]},
+    "zone": {"type": ["string", "null"], "description": "C1, C2 or a location label from reference.yaml (Office, Storage, ...)"},
     "actor": {"type": "string", "description": "officer: scanner / checker / escorting officer (English name from reference.yaml)"},
     "partner": {"type": "string", "description": "scan only: the officer who checked the scanner"},
     "subjects": {"type": "array", "items": {"type": "string"}, "description": "checked / escorted persons"},

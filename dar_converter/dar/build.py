@@ -65,8 +65,10 @@ class Builder:
         for e in evs:
             e.used = False
         self._dedupe(evs, res)
+        self._resolve_namesakes(evs)
         self._resolve_scan_starts(evs, res)
-        self._merge_scan_and_check(evs)
+        if int(self.s.get("rules.merge_scan_and_check_gap", 0)) > 0:
+            self._merge_scan_and_check(evs)
         self._zone_from_pair(evs)
         self._join_zone_pairs(evs)
         self._infer_missing_zone(evs, res)
@@ -75,6 +77,7 @@ class Builder:
         rows += self._scan_rows(evs, res)
         rows += self._check_rows(evs, res)
         rows += self._escort_rows(self._segments)
+        self._mark_missing_zone(evs, rows)
         roster = self._roster(day, evs, res, roster_override)
         res.roster = roster
         rows += self._assumed_post_rows(day, roster)
@@ -82,6 +85,11 @@ class Builder:
         self._apply_busy_checker(rows)
         for r in rows:
             self._finish_times(r)
+        fix_below = float(self.s.get("review.fix_below", 0.6))
+        for r in rows:
+            if r.confidence < fix_below:
+                for f in r.flags:
+                    r.need_fix(f)
         rows.sort(key=lambda r: (0 if r.action == ASSUMED_POST else 1,
                                  r.d_e_f[0] if r.d_e_f and r.d_e_f[0] is not None else 10 ** 9,
                                  r.seq))
@@ -134,6 +142,39 @@ class Builder:
                     b.used = True
                     b.note("כפילות של דיווח קודם")
 
+    # ---------------------------------------------------------------- namesakes
+    def _resolve_namesakes(self, evs: list[Event]) -> None:
+        """A checked / escorted name shared by an officer and an employee ("אסף").
+
+        Only officers scan and check, so the officer is meant only when the check belongs to
+        his own work: right after his scan in that zone, or when he is relieved from an escort
+        in the same message. Otherwise (and always when he is the one checking) it is the
+        employee, who is checked a few times a day when entering C1 / C2.
+        """
+        handover_msgs = {e.msg.id for e in evs if e.kind in ("escort_handover", "escort_end")}
+        for e in evs:
+            if e.kind not in ("check", "escort_start", "escort_end", "escort_join",
+                              "escort_handover") or e.used:
+                continue
+            new = []
+            for subj in e.subjects:
+                others = [n for n, kind in self.ref.namesakes(subj) if kind == "person"] \
+                    if self.ref.is_officer(subj) else []
+                if not others:
+                    new.append(subj)
+                    continue
+                t = e.start if e.start is not None else e.end
+                after_own_scan = any(x.kind == "scan" and x.actor == subj and x.end is not None
+                                     and x.zone in (e.zone, None) and t is not None
+                                     and 0 <= t - x.end <= 5 for x in evs)
+                own_work = after_own_scan or e.msg.id in handover_msgs
+                if e.kind == "check" and e.actor != subj and own_work:
+                    new.append(subj)
+                else:
+                    new.append(others[0])
+                    e.info.append(f"'{subj}' זוהה כ-{others[0]} לפי ההקשר")
+            e.subjects = new
+
     # ---------------------------------------------------------------- scan starts
     def _resolve_scan_starts(self, evs: list[Event], res: DayResult) -> None:
         scans = [e for e in evs if e.kind == "scan" and not e.used]
@@ -143,21 +184,13 @@ class Builder:
             if any(s.actor == st.actor and (st.zone is None or s.zone in (st.zone, None))
                    and s.start is not None and abs(s.start - st.start) <= 2 for s in scans):
                 continue                                   # the full report came later
-            # "42 תחילת סריקה דנה c2" + "48 בדיקה לדנה c2" -> scan 42-48 with checker
-            cand = [c for c in checks if st.actor in c.subjects and c.end is not None
-                    and st.start < c.end <= st.start + 15 and c.zone in (st.zone, None)]
-            if cand:
-                c = cand[0]
-                c.used = True
-                new = Event("scan", st.msg, st.line, day=st.day, start=st.start, end=c.end,
-                            zone=st.zone or c.zone, actor=st.actor, partner=c.actor,
-                            confidence=min(st.confidence, c.confidence), notes=list(st.notes),
-                            info=["סריקה = תחילת סריקה + בדיקה של הסורק"], extra_sources=[c.msg])
-                evs.append(new)
-            else:
-                res.issues.append(Issue(st.day, "scan_start_only",
-                                        f"תחילת סריקה בלי דיווח סיום ({fmt_minutes(st.start)})",
-                                        sources=[st.msg]))
+            # "42 תחילת סריקה דנה c2" with no full report: the scan gets the average
+            # length; a later "48 בדיקה לדנה" stays a separate Material Search row
+            minutes = int(self.s.get("times.scan_minutes", 3))
+            evs.append(Event("scan", st.msg, st.line, day=st.day, start=st.start,
+                             end=st.start + minutes, zone=st.zone, actor=st.actor,
+                             confidence=min(st.confidence, MEDIUM),
+                             notes=st.notes + [f"דווחה רק תחילת סריקה - משך ממוצע {minutes} דק'"]))
         evs.sort(key=_tkey)
 
     # ---------------------------------------------------------------- solo scan + check
@@ -184,10 +217,21 @@ class Builder:
 
     # ---------------------------------------------------------------- zone pairs
     def _zone_from_pair(self, evs: list[Event]) -> None:
-        """'17-20-c1-גיל סרק...' + '20-23-גיל סרק...' -> the second one is C2."""
+        """'17-20-c1-גיל סרק...' + '20-23-גיל סרק...' -> the second one is C2.
+
+        Also "42-45 ... C2" followed right away by "45-48 ... C2" by the same pair: a round
+        always covers both zones, so the second one is C1 (typo in the chat).
+        """
         gap = int(self.s.get("rules.join_max_gap", 3))
         scans = [e for e in evs if e.kind == "scan" and not e.used and e.start is not None
                  and e.end is not None]
+        scans.sort(key=lambda e: e.start)
+        for a, b in zip(scans, scans[1:]):
+            if a.zone in ZONES and a.zone == b.zone and a.actor == b.actor and a.partner == b.partner \
+                    and a.partner and 0 <= b.start - a.end <= gap:
+                other = "C1" if a.zone == "C2" else "C2"
+                b.note(f"שתי סריקות {a.zone} ברצף - השנייה נרשמה כ-{other}", MEDIUM)
+                b.zone = other
         for e in [x for x in scans if x.zone is None]:
             for o in scans:
                 if o is e or o.zone not in ZONES or o.actor != e.actor or o.partner != e.partner:
@@ -237,6 +281,24 @@ class Builder:
                              notes=[f"{other} לא דווח - נוסף לפי ההגדרה infer_missing_zone"],
                              inferred=True))
 
+    def _mark_missing_zone(self, evs: list[Event], rows: list[Row]) -> None:
+        """A checked scan of one zone with no scan of the other zone around it."""
+        scans = [e for e in evs if e.kind == "scan" and not e.used and e.zone in ZONES
+                 and e.start is not None and e.end is not None]
+        for a in scans:
+            if not a.partner:
+                continue
+            other = "C1" if a.zone == "C2" else "C2"
+            people = {a.actor, a.partner}
+            # the other zone may be covered by another officer (e.g. the one escorting in C1)
+            if any(b.zone == other and (abs(b.start - a.end) <= 15 or abs(a.start - b.end) <= 15)
+                   for b in scans):
+                continue
+            for r in rows:
+                if r.action in (PATROL, SEARCH) and r.start == a.start and r.end == a.end \
+                        and r.officer in people and a.msg in r.sources:
+                    r.need_fix(f"דווח רק {a.zone} - אם נסרק גם {other}, להוסיף שורות")
+
     # ---------------------------------------------------------------- rows: scans
     def _scan_rows(self, evs: list[Event], res: DayResult) -> list[Row]:
         rows = []
@@ -285,6 +347,8 @@ class Builder:
                 if subj and subj.startswith("?"):
                     row_notes.append(f"!שם לא מוכר: {subj[1:]}")
                 start = c.start if c.start is not None else (c.end - 1 if c.end is not None else None)
+                if c.single_time and c.end is not None and self.ref.needs_escort(name):
+                    start = c.end - int(self.s.get("times.check_minutes_contractor", 2))
                 r = self._row(c.day, SEARCH, c.actor, start, c.end, self._ms_comment(zone, name),
                               [c.msg])
                 self._carry(r, c)
@@ -433,6 +497,8 @@ class Builder:
                           [x.msg for x in seg["events"]])
             if name is None:
                 r.flag(f"שם לא מוכר: {p[1:]} - להוסיף לרשימת השמות", LOW)
+            elif self.ref.needs_escort(name) is False:
+                r.flag(f"{name} לא צריך ליווי - לבדוק את ההודעה", LOW)
             self._carry(r, *[x for x in seg["events"] if x.kind != "check"])
             for n in seg["notes"]:
                 r.flag(n, MEDIUM)
@@ -474,35 +540,50 @@ class Builder:
         if not officers:
             return []
 
-        groups: list[list[str]] = [[o] for o in officers]
-        notes: dict[str, str] = {}
-        if len(groups) > 3:
-            early = [o for o in officers if span[o][1] <= split + 45]
-            late = [o for o in officers if span[o][0] >= split - 45]
-            pairs = []
-            for a in early:
-                for b in late:
-                    if a != b and span[b][0] >= span[a][1] - 5 and a not in sum(pairs, []) \
-                            and b not in sum(pairs, []):
-                        pairs.append([a, b])
-            for a, b in pairs:
-                if len(groups) <= 3:
+        # Shift 1 = the day's supervisor (may hardly scan); full day.
+        sups = [o for o in officers if self.ref.is_supervisor(o)]
+        sup = sups[0] if sups else None
+        if sup is None:
+            res.issues.append(Issue(day, "no_supervisor",
+                                    "לא זוהה מפקח (Shift 1) בצ'אט - להוסיף ידנית את שורת ה-Assumed Post שלו"))
+        others = [o for o in officers if o != sup]
+
+        # working hours of the others = the hours of their own scans / checks
+        def hours(o: str) -> tuple[int, int]:
+            first, last = span[o]
+            if not day_start < split < day_end or day_end - day_start < 9 * 60:
+                return day_start, day_end                  # short day (holiday eve): no split
+            a = day_start if first < split - 45 else split
+            b = day_end if last > split + 45 else split
+            return (a, b) if a < b else (day_start, day_end)
+
+        hrs = {o: hours(o) for o in others}
+        groups: list[list[str]] = []
+        used: set[str] = set()
+        for a in others:                                   # morning + afternoon share a post
+            if a in used or hrs[a] != (day_start, split):
+                continue
+            for b in others:
+                if b not in used and b != a and hrs[b] == (split, day_end):
+                    groups.append([a, b])
+                    used |= {a, b}
                     break
-                groups = [g for g in groups if g not in ([a], [b])] + [[a, b]]
-                notes[a] = notes[b] = "החלפה באמצע היום הוסקה מהפעילות בצ'אט"
-            if len(groups) > 3:
-                res.issues.append(Issue(day, "roster",
-                                        "יותר משלושה מאבטחים ביום - לבדוק את העמדות: "
-                                        + ", ".join(officers)))
+        groups += [[o] for o in others if o not in used]
         groups.sort(key=lambda g: min(self.ref.priority(o) for o in g))
+        if len(groups) > 2:
+            res.issues.append(Issue(day, "roster",
+                                    "יותר מאבטחים מעמדות - לבדוק את ה-Shift של: "
+                                    + ", ".join(o for g in groups[2:] for o in g)))
+
         roster = []
-        for slot, g in enumerate(groups, start=1):
-            if len(g) == 1:
-                roster.append(RosterEntry(g[0], slot, day_start, day_end))
-            else:
-                a, b = sorted(g, key=lambda o: span[o][0])
-                roster.append(RosterEntry(a, slot, day_start, split, True, notes.get(a, "")))
-                roster.append(RosterEntry(b, slot, split, day_end, True, notes.get(b, "")))
+        if sup:
+            roster.append(RosterEntry(sup, 1, day_start, day_end))
+        for slot, g in enumerate(groups, start=2):
+            for o in sorted(g, key=lambda o: hrs[o][0]):
+                a, b = hrs[o]
+                partial = (a, b) != (day_start, day_end)
+                roster.append(RosterEntry(o, slot, a, b, partial,
+                                          "שעות העבודה הוסקו מהסריקות והבדיקות בצ'אט" if partial else ""))
         return roster
 
     def _assumed_post_rows(self, day: date, roster: list[RosterEntry]) -> list[Row]:
@@ -521,6 +602,8 @@ class Builder:
         for row in rows:
             if row.officer in slot and 1 <= slot[row.officer] <= 3:
                 row.shift = f"Shift {slot[row.officer]}"
+            elif row.officer in slot:
+                row.need_fix("אין עמדה פנויה (Shift) למאבטח הזה ביום")
             elif row.officer:
                 row.flag("המאבטח לא נמצא ברשימת המשמרת של היום", MEDIUM)
 

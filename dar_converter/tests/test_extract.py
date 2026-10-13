@@ -104,3 +104,8 @@ def test_chatter_and_unknown(extractor):
     assert one(extractor, msg("12:00", DANA, "יוצאים לצהריים")).kind == "ignore"
     assert one(extractor, msg("12:00", DANA, "פגשנו את רון למטה")).kind == "chatter"
     assert one(extractor, msg("10:51", DANA, "50 רון חוזר ל-c1")).kind == "unknown"
+
+
+def test_location_with_digits_is_not_read_as_a_time(extractor):
+    e = one(extractor, msg("12:54", DANA, "49 תחילת ליווי רון bldg 7"))
+    assert (e.kind, e.zone, hm(e.start)) == ("escort_start", "BLDG7", "12:49")

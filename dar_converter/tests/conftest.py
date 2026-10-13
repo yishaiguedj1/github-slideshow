@@ -18,9 +18,9 @@ from dar.settings import load_settings  # noqa: E402
 DAY = date(2026, 8, 5)
 DANA = "Dana Cohen"      # sender "דנה - עבודה"
 AVI = "Avi Levi"         # sender "אבי לוי"
-NOA = "Noa Bar"          # sender "נועה - עבודה - Google"
+NOA = "Noa Bar"          # sender "נועה - עבודה - חברה"
 GIL = "Gil Amir"
-SENDERS = {DANA: "דנה - עבודה", AVI: "אבי לוי", NOA: "נועה - עבודה - Google", GIL: "גיל אמיר"}
+SENDERS = {DANA: "דנה - עבודה", AVI: "אבי לוי", NOA: "נועה - עבודה - חברה", GIL: "גיל אמיר"}
 
 
 @pytest.fixture(scope="session")
