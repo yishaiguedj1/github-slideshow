@@ -499,8 +499,8 @@ class Extractor:
                         start=chk.start, end=chk.start, day=chk.day)
                 if "start" in kinds:
                     return [chk, st]
-                if chk.start is not None and chk.end is not None and chk.end - chk.start > 1:
-                    chk.start = chk.end - 1
+                if chk.start is not None and chk.end is not None and chk.end - chk.start > 2:
+                    chk.start = chk.end - 1          # a long escort: the exit check is the last minute
                 return [st, chk]
             if esc_i is not None and esc_i > i and plain:
                 # "13 בדיקה לטל וליווי לרון בc2": one person checked, another escorted from now

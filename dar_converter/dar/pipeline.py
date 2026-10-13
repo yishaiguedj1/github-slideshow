@@ -45,7 +45,8 @@ def run(messages: list[Message], start: date, end: date, settings: Settings, ref
 
     window = [m for m in messages if start - timedelta(days=1) <= m.ts.date() <= end + timedelta(days=1)]
     window = apply_to_messages(window, corr)
-    events = extract_all(window, ref, int(settings.get("times.future_tolerance", 2)))
+    events = extract_all(window, ref, int(settings.get("times.future_tolerance", 2)),
+                         int(settings.get("times.scan_minutes", 3)))
     explicit_ids = {mid for mid, fix in corr.messages.items() if fix.get("events")}
     if explicit_ids:
         events = [e for e in events if e.msg.id not in explicit_ids]
