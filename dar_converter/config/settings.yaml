@@ -1,0 +1,56 @@
+# Conventions of the manual DAR entry (learned from the days entered manually in Aug 2026).
+# No personal data here: names live in data/reference.yaml (git-ignored).
+
+paths:
+  data_dir: ../data            # relative to the folder above config/ (or env DAR_DATA_DIR)
+  chat: whatsapp_chat.txt
+  template: DAR_August_2026.xlsx
+  reference: reference.yaml
+  corrections: corrections.yaml
+  out_dir: out
+
+day:
+  start: "07:00"
+  end: "19:00"
+  split_at: "13:00"            # a post can be split 07:00-13:00 / 13:00-19:00
+  holiday_end: "14:00"         # holiday eves: 07:00-14:00
+  holidays: []                 # ["2026-09-20", ...] days that end at holiday_end
+  workdays: [6, 0, 1, 2, 3]    # Python weekday(): Sun=6, Mon=0 ... Thu=3
+
+times:
+  d_offset_seconds: 60         # D (request) = F - 60s
+  e_offset_seconds: 30         # E (dispatch) = F - 30s
+  single_minute: 1             # "44 בדיקה לרון" -> F=43, G=44
+  future_tolerance: 2          # minutes a reported time may exceed the send time
+
+rules:
+  join_zone_pairs: true        # C2 + C1 of the same round become contiguous
+  join_max_gap: 3              # minutes between the two zones of one round
+  join_mode: auto              # auto: gap 1 -> C1 starts at C2 end, gap 2-3 -> boundary C2 end + 1
+                               # also: c1_starts_at_c2_end | c2_ends_at_c1_start
+  infer_missing_zone: false    # when only C2 was reported: add a flagged C1 row
+  infer_missing_zone_minutes: 3
+  merge_scan_and_check_gap: 3  # "37-40 X סרק" + "43 בדיקה לX" -> one pair 37-43
+  busy_checker_last_minute: false  # checker busy during the scan -> search = last minute
+  escort_start_without_time: message_time
+
+badges:                        # header cells C4 / C5 on days with activity (null = leave empty)
+  employee: 48
+  visitor: 0
+
+template:
+  first_data_row: 10
+  last_data_row: 2200
+
+validation:
+  max_patrol_minutes: 15
+  max_check_minutes: 10
+  max_escort_minutes: 360
+  hole_minutes: 90             # no patrol for this long inside the work day -> flag
+
+review:
+  min_confidence_main: 0.6     # rows below this go to the review file only
+  cell_notes: true             # add a note on flagged cells in the DAR file
+
+locale:
+  date_order: DMY              # WhatsApp export date order

@@ -1,0 +1,163 @@
+"""Command line:  python -m dar <command> ...
+
+  convert   --from 2026-08-01 --to 2026-08-31      chat -> DAR file + review file
+  evaluate  --days 2026-08-16,2026-08-17           compare with the real DAR (gap report)
+  pending   --from ... --to ...                    unrecognised lines (JSON) for a Claude session
+  learn                                            merge corrections into the reference lists
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+
+from .corrections import Corrections, learn
+from .evaluate import FIELDS, evaluate, format_summary, load_actual, write_report
+from .normalize import Reference
+from .parse import parse_file
+from .pipeline import messages_by_day, run
+from .settings import load_settings
+from .write import load_template, template_month, write_dar, write_pending_json, write_review
+
+
+def _date(s: str) -> date:
+    return date.fromisoformat(s)
+
+
+def _common(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--settings", help="settings.yaml (ברירת מחדל: config/settings.yaml)")
+    p.add_argument("--chat", help="קובץ ייצוא הצ'אט")
+    p.add_argument("--reference", help="קובץ השמות (reference.yaml)")
+    p.add_argument("--corrections", help="קובץ התיקונים (corrections.yaml)")
+
+
+def _load(args):
+    s = load_settings(args.settings)
+    chat = Path(args.chat) if args.chat else s.path("chat")
+    ref_path = Path(args.reference) if args.reference else s.path("reference")
+    corr_path = Path(args.corrections) if args.corrections else s.path("corrections")
+    msgs = parse_file(chat, s.get("locale.date_order", "DMY"))
+    ref = Reference.load(ref_path)
+    corr = Corrections.load(corr_path)
+    return s, msgs, ref, corr, ref_path
+
+
+def cmd_convert(args) -> int:
+    s, msgs, ref, corr, ref_path = _load(args)
+    start, end = args.date_from, args.date_to
+    out_dir = Path(args.out_dir) if args.out_dir else s.data_dir / s.get("paths.out_dir", "out")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    template = Path(args.template) if args.template else s.path("template")
+
+    rr = run(msgs, start, end, s, ref, corr, ref_path, s.data_dir / "examples.jsonl")
+    wb = load_template(template, s)
+    y, mth = template_month(wb)
+    other = sorted({(d.year, d.month) for d in (start, end)} - {(y, mth)})
+    if other:
+        print(f"התבנית היא של {mth:02d}/{y}, והטווח כולל חודש אחר ({other}). "
+              "צריך תבנית לכל חודש - הרץ כל חודש בנפרד עם --template.", file=sys.stderr)
+        return 2
+    where = write_dar(wb, rr.results, s)
+    tag = f"{start:%Y-%m-%d}_{end:%Y-%m-%d}"
+    dar_path = out_dir / (args.name or f"DAR_{tag}.xlsx")
+    review_path = out_dir / f"review_{tag}.xlsx"
+    pending_path = out_dir / f"pending_{tag}.json"
+    wb.save(dar_path)
+    write_review(review_path, rr.results, where, s, rr.pending, rr.chatter)
+    write_pending_json(pending_path, rr.pending, messages_by_day(rr.messages))
+
+    n_rows = sum(1 for k in where)
+    n_flag = sum(1 for res in rr.results for r in res.rows if r.flags and (res.day, r.seq) in where)
+    n_review = sum(1 for res in rr.results for r in res.rows if (res.day, r.seq) not in where)
+    n_issues = sum(len(res.issues) for res in rr.results)
+    print(f"נכתבו {n_rows} שורות ({n_flag} עם סימון לבדיקה), {n_review} שורות רק בקובץ הבדיקה, "
+          f"{n_issues} בעיות ברמת יום, {len(rr.pending)} שורות צ'אט שלא זוהו.")
+    for line in rr.learned:
+        print("נלמד:", line)
+    print("DAR:    ", dar_path)
+    print("בדיקה:  ", review_path)
+    print("לא זוהו:", pending_path)
+    return 0
+
+
+def cmd_evaluate(args) -> int:
+    s, msgs, ref, corr, ref_path = _load(args)
+    if args.days:
+        days = [_date(d) for d in args.days.split(",")]
+    else:
+        days, d = [], args.date_from
+        while d <= args.date_to:
+            days.append(d)
+            d += timedelta(days=1)
+    actual_path = Path(args.actual) if args.actual else s.path("template")
+    rr = run(msgs, min(days), max(days), s, ref, corr)
+    th = float(s.get("review.min_confidence_main", 0.6))
+    pred = {res.day: [r for r in res.rows if r.confidence >= th] for res in rr.results}
+    actual = load_actual(actual_path, days)
+    fields = tuple(args.fields.split(",")) if args.fields else FIELDS
+    res = evaluate(pred, actual, days, fields)
+    title = f"השוואה ל-{actual_path.name}, ימים: " + ", ".join(f"{d:%d/%m}" for d in days)
+    print(format_summary(res, title))
+    if args.report:
+        write_report(args.report, res, messages_by_day(rr.messages), title)
+        print("דוח פערים:", args.report)
+    return 0
+
+
+def cmd_pending(args) -> int:
+    s, msgs, ref, corr, ref_path = _load(args)
+    rr = run(msgs, args.date_from, args.date_to, s, ref, corr)
+    out = Path(args.out) if args.out else s.data_dir / s.get("paths.out_dir", "out") / \
+        f"pending_{args.date_from}_{args.date_to}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    write_pending_json(out, rr.pending, messages_by_day(rr.messages))
+    print(f"{len(rr.pending)} שורות שלא זוהו -> {out}")
+    return 0
+
+
+def cmd_learn(args) -> int:
+    s, msgs, ref, corr, ref_path = _load(args)
+    learned = learn(corr, ref, ref_path)
+    print("\n".join(learned) if learned else "אין כינויים חדשים ללמוד.")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="python -m dar", description="WhatsApp -> DAR")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    c = sub.add_parser("convert", help="המרה של טווח תאריכים לקובץ DAR")
+    _common(c)
+    c.add_argument("--from", dest="date_from", type=_date, required=True)
+    c.add_argument("--to", dest="date_to", type=_date, required=True)
+    c.add_argument("--template")
+    c.add_argument("--out-dir")
+    c.add_argument("--name", help="שם קובץ הפלט")
+    c.set_defaults(func=cmd_convert)
+
+    e = sub.add_parser("evaluate", help="השוואה לאקסל אמיתי")
+    _common(e)
+    e.add_argument("--days", help="2026-08-16,2026-08-17")
+    e.add_argument("--from", dest="date_from", type=_date)
+    e.add_argument("--to", dest="date_to", type=_date)
+    e.add_argument("--actual", help="האקסל האמיתי (ברירת מחדל: התבנית)")
+    e.add_argument("--fields", help="שדות להשוואה, למשל officer,action,F,G,comment")
+    e.add_argument("--report", help="קובץ xlsx לדוח הפערים")
+    e.set_defaults(func=cmd_evaluate)
+
+    pnd = sub.add_parser("pending", help="שורות שלא זוהו, עם הקשר")
+    _common(pnd)
+    pnd.add_argument("--from", dest="date_from", type=_date, required=True)
+    pnd.add_argument("--to", dest="date_to", type=_date, required=True)
+    pnd.add_argument("--out")
+    pnd.set_defaults(func=cmd_pending)
+
+    lr = sub.add_parser("learn", help="הוספת כינויים מקובץ התיקונים לרשימות")
+    _common(lr)
+    lr.set_defaults(func=cmd_learn)
+
+    args = ap.parse_args(argv)
+    if args.cmd == "evaluate" and not args.days and not (args.date_from and args.date_to):
+        ap.error("evaluate צריך --days או --from/--to")
+    return args.func(args)

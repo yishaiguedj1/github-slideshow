@@ -3,3 +3,9 @@ _site/
 .jekyll-metadata
 .bundle
 data/
+
+# DAR converter
+.env
+__pycache__/
+*.pyc
+.pytest_cache/

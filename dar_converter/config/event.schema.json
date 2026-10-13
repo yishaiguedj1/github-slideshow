@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DAR event (one fact from one WhatsApp line)",
+  "description": "Used for explicit events in data/corrections.yaml (messages.<id>.events). Checked in code by dar.corrections.event_problems.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind"],
+  "properties": {
+    "kind": {"enum": ["scan", "check", "escort_start", "escort_end", "escort_join", "escort_handover"]},
+    "start": {"type": "string", "pattern": "^\\d{1,2}:\\d{2}$"},
+    "end": {"type": ["string", "null"], "pattern": "^\\d{1,2}:\\d{2}$"},
+    "zone": {"enum": ["C1", "C2", "Office", "Storage", "TLV13", null]},
+    "actor": {"type": "string", "description": "officer: scanner / checker / escorting officer (English name from reference.yaml)"},
+    "partner": {"type": "string", "description": "scan only: the officer who checked the scanner"},
+    "subjects": {"type": "array", "items": {"type": "string"}, "description": "checked / escorted persons"},
+    "day": {"type": "string", "format": "date", "description": "defaults to the message date"}
+  },
+  "allOf": [
+    {"if": {"properties": {"kind": {"const": "scan"}}}, "then": {"required": ["start", "end", "actor"]}},
+    {"if": {"properties": {"kind": {"const": "check"}}}, "then": {"required": ["end", "actor", "subjects"]}},
+    {"if": {"properties": {"kind": {"enum": ["escort_start", "escort_join"]}}}, "then": {"required": ["start", "actor", "subjects"]}}
+  ]
+}
