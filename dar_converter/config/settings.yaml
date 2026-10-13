@@ -14,7 +14,8 @@ day:
   end: "19:00"
   split_at: "13:00"            # a post can be split 07:00-13:00 / 13:00-19:00
   holiday_end: "14:00"         # holiday eves: 07:00-14:00
-  holidays: ["2026-05-21", "2026-09-20"]   # holiday eves on workdays (07:00-14:00)
+  holidays: ["2026-05-21", "2026-09-20",   # short days (07:00-14:00): holiday eves and
+             "2026-09-27", "2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01"]  # Sukkot week
   workdays: [6, 0, 1, 2, 3]    # Python weekday(): Sun=6, Mon=0 ... Thu=3
 
 times:

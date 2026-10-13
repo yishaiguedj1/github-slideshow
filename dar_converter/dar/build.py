@@ -702,17 +702,20 @@ class Builder:
         ordered = fulls + pairs + rest
         for i, g in enumerate(ordered):
             slot = 2 + i
+            extra = slot > 3 and any(hrs[o] == full for o in g)
             if slot > 3:
-                if all(hrs[o] != full for o in g):
-                    slot = 3                                # a partial post shares the last slot
-                else:
-                    res.issues.append(Issue(day, "roster",
-                                            "יותר מאבטחים מעמדות - לבדוק את ה-Shift של: " + ", ".join(g)))
+                # a 4th officer shares Shift 3, as in the manual entries (two names in Shift 3)
+                slot = 3
+                if extra:
+                    res.issues.append(Issue(day, "extra_officer",
+                                            "יותר משלושה מאבטחים ביום - שובצו גם ב-Shift 3: " + ", ".join(g)))
             for o in sorted(g, key=lambda o: hrs[o][0]):
                 a, b = hrs[o]
                 partial = (a, b) != full
-                roster.append(RosterEntry(o, slot, a, b, partial,
-                                          "שעות העבודה הוסקו מהסריקות והבדיקות בצ'אט" if partial else ""))
+                note = "שעות העבודה הוסקו מהסריקות והבדיקות בצ'אט" if partial else ""
+                if extra:
+                    note = "מאבטח רביעי ביום - שובץ ב-Shift 3 יחד עם מאבטח נוסף"
+                roster.append(RosterEntry(o, slot, a, b, partial or extra, note))
         return roster
 
     def _assumed_post_rows(self, day: date, roster: list[RosterEntry]) -> list[Row]:

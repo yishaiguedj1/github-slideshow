@@ -107,11 +107,12 @@ def test_supervisor_is_shift_1_and_others_by_priority(ref, settings):
                                 msg("17:10", DANA, "05-08 אבי סרק דנה בדקה c1")])
     ap = [(r.shift, r.officer, hm(r.start), hm(r.end)) for r in rows_of(res, ASSUMED_POST)]
     assert ap == [("Shift 1", "Dana Cohen", "07:00", "19:00"), ("Shift 2", "Avi Levi", "07:00", "19:00"),
-                  ("Shift 3", "Noa Bar", "07:00", "19:00"), (None, "Gil Amir", "07:00", "19:00")]
-    # Gil is a 4th full-day officer: no free post -> marked for a fix, day issue
+                  ("Shift 3", "Noa Bar", "07:00", "19:00"), ("Shift 3", "Gil Amir", "07:00", "19:00")]
+    # Gil is a 4th full-day officer: he shares Shift 3 (as in the manual entries), with a note
     gil = [r for r in res.rows if r.officer == "Gil Amir"]
-    assert all(r.shift is None and r.fix for r in gil)
-    assert any("Gil Amir" in i.message for i in res.issues)
+    assert all(r.shift == "Shift 3" and not r.fix for r in gil)
+    assert rows_of(res, ASSUMED_POST)[3].flags
+    assert any(i.kind == "extra_officer" and "Gil Amir" in i.message for i in res.issues)
     assert res.rows[0].action == ASSUMED_POST and res.rows[0].d_e_f[0] == 7 * 3600
 
 
