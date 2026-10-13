@@ -123,7 +123,7 @@ def hour_header(line: str) -> int | None:
     s = re.sub(r":", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     # "שעה 16:00-17:00", "של שעה 10:00-11:" -> the first hour
-    m = re.fullmatch(r"(?:זה )?(?:סריקות |סריקה )?(?:של )*(?:שעה )?(\d{1,2})(?: 00)?"
+    m = re.fullmatch(r"(?:(?:זה|מעודכן|עדכון|סריקות|סריקה|של) )*(?:ל?שעה )?(\d{1,2})(?: 00)?"
                      r"(?: \d{1,2}(?: 00)?)?", s)
     if m and 0 <= int(m.group(1)) <= 23:
         return int(m.group(1))
@@ -489,6 +489,26 @@ class Extractor:
                 chk.note("לא צוין את מי בדקו", LOW)
             out.append(chk)
             point = chk.end
+            esc_i = kinds.index("escort") if "escort" in kinds else None
+            plain = not set(kinds) & {"handover", "end", "exit", "exit_noun", "join"}
+            if esc_i is not None and esc_i < i and plain and subj:
+                # "12-26 ליווי ובדיקה לרון בc2": escorted over the range, checked at the end;
+                # "תחילת ליווי ובדיקה לרון" - the check is on the way in and comes first
+                escorted = toks[after[0]][2] if after else subj     # the visitor namesake
+                st = ev("escort_start", zone=where, actor=sender_officer, subjects=[escorted],
+                        start=chk.start, end=chk.start, day=chk.day)
+                if "start" in kinds:
+                    return [chk, st]
+                if chk.start is not None and chk.end is not None and chk.end - chk.start > 1:
+                    chk.start = chk.end - 1
+                return [st, chk]
+            if esc_i is not None and esc_i > i and plain:
+                # "13 בדיקה לטל וליווי לרון בc2": one person checked, another escorted from now
+                escorted = [t[2] for t in toks[esc_i + 1:] if t[1] in ("person", "unknown_name")]
+                if escorted:
+                    out.append(ev("escort_start", zone=where, actor=sender_officer, subjects=escorted,
+                                  start=chk.start, end=chk.start, day=chk.day))
+                    return out
             if "handover" in kinds:
                 escorted = list(people)
                 h = ev("escort_handover", zone=where, actor=sender_officer, subjects=escorted,
@@ -679,6 +699,9 @@ class Extractor:
         x = exprs[0]
         e._explicit_hour = x.h1 is not None or x.h2 is not None
         t_msg = msg.ts.hour * 60 + msg.ts.minute
+        # an edited message keeps its first send time, while the text may report the
+        # next minutes ("50 תחילת ליווי" edited into a message sent at :47)
+        tol = max(self.tol, 15) if msg.edited else self.tol
         end_m = x.m2 if x.is_range else x.m1
         # ---- end time
         if x.h2 is not None:
@@ -692,16 +715,16 @@ class Extractor:
             if x.is_range and end_m < x.m1:
                 end += 60
         elif getattr(self, "_anchor", None) is not None and \
-                (self._anchor // 60) * 60 + end_m <= t_msg + self.tol + 60:
+                (self._anchor // 60) * 60 + end_m <= t_msg + tol + 60:
             # "11:30 בדיקה לרון c1 / 25-28 גיל סרק c1" -> same hour as the explicit time
             end = (self._anchor // 60) * 60 + end_m
             if end < self._anchor - 30:
                 end += 60
-            if end > t_msg + self.tol:
+            if end > t_msg + tol:
                 end -= 60
         else:
             end = (t_msg // 60) * 60 + end_m
-            if end > t_msg + self.tol:
+            if end > t_msg + tol:
                 end -= 60
         # ---- start time
         if x.is_range:
@@ -714,7 +737,7 @@ class Extractor:
         else:
             start = end
         # ---- day attribution (late report after midnight, "*של שעה 18:00*" at 00:18)
-        if end > t_msg + self.tol and (x.h1 is not None or x.h2 is not None or hour_ctx is not None):
+        if end > t_msg + tol and (x.h1 is not None or x.h2 is not None or hour_ctx is not None):
             if t_msg < 6 * 60:
                 e.day = msg.ts.date() - timedelta(days=1)
             else:
@@ -737,7 +760,7 @@ class Extractor:
             end = None
             if x.h1 is None and hour_ctx is None:       # keep the start in the message's hour
                 start = (t_msg // 60) * 60 + x.m1
-                if start > t_msg + self.tol:
+                if start > t_msg + tol:
                     start -= 60
         if hour_ctx is None and x.h1 is None and x.h2 is None and end is not None \
                 and t_msg - end > 50 and e.day == msg.ts.date():

@@ -201,3 +201,23 @@ def test_glued_and_misspelt_words(extractor):
     e = one(extractor, msg("12:54", AVI, "12:20-רון נכננסה למשרד"))
     assert (e.kind, e.subjects) == ("escort_start", ["Ron Shani"])
     assert one(extractor, msg("09:27", AVI, "וואלה מסכים")).kind == "chatter"
+
+
+def test_escort_and_check_in_one_line(extractor):
+    evs = extractor.extract(msg("12:27", AVI, "12-26 ליווי ובדיקה לרון בc2"))
+    assert [(e.kind, e.subjects, hm(e.start), hm(e.end)) for e in evs] == [
+        ("escort_start", ["Ron Shani"], "12:12", "12:12"), ("check", ["Ron Shani"], "12:25", "12:26")]
+    evs = extractor.extract(msg("10:14", AVI, "13 בדיקה לטל וליווי לרון בc2"))
+    assert [(e.kind, e.subjects, hm(e.start)) for e in evs] == [
+        ("check", ["Tal Peretz"], "10:12"), ("escort_start", ["Ron Shani"], "10:12")]
+
+
+def test_edited_message_may_report_the_next_minutes(extractor):
+    m = msg("09:47", AVI, "51 תחילת ליווי רון c1")
+    m.edited = True
+    assert hm(one(extractor, m).start) == "09:51"
+    assert hm(one(extractor, msg("09:47", AVI, "51 תחילת ליווי רון c1")).start) == "08:51"
+
+
+def test_updated_for_hour_header():
+    assert hour_header("מעודכן לשעה 13:00:") == 13

@@ -444,6 +444,8 @@ class Builder:
                     o = open_.get(p)
                     if not o or ev.end is None or ev.end < o["start"]:
                         continue
+                    if o["loc"] in ZONES and ev.zone in ZONES and o["loc"] != ev.zone:
+                        o["exit_elsewhere"] = ev               # checked out in the other zone
                     if o["loc"] in (None, ev.zone) or ev.zone is None:
                         if o["loc"] is None and ev.zone:
                             o["loc"] = ev.zone
@@ -471,7 +473,11 @@ class Builder:
                 targets = [p for p in ev.subjects if p in open_] or \
                           [p for p, o in open_.items() if ev.zone in (None, o["loc"])
                            and o["officer"] != ev.actor]
-                if not targets:
+                for p in ev.subjects:
+                    if p not in open_ and p not in targets:
+                        # "47 המשך ליווי רון c1" after his exit check: the escort starts again
+                        start(p, ev, t, ev.zone)
+                if not targets and not ev.subjects:
                     res.issues.append(Issue(ev.day, "handover_without_escort",
                                             "החלפת ליווי בלי ליווי פתוח", sources=[ev.msg]))
                 for p in targets:
@@ -526,7 +532,15 @@ class Builder:
                         open_[p]["notes"].append(f"מיקום הליווי ({ev.zone}) נלקח מהודעת הסיום")
                     close(p, ev.end if ev.end is not None else t)
         for p in list(open_):
-            close(p, None)
+            # no end reported: the last check of the person in the other zone ends it
+            # ("21 ליווי רון c2" ... "33-35-c1-בדיקה רון" -> 12:21-12:35)
+            last = open_[p].get("exit_elsewhere")
+            if last is not None:
+                open_[p]["events"].append(last)
+                open_[p]["notes"].append(f"הליווי הסתיים בבדיקת היציאה ב-{last.zone}")
+                close(p, last.end)
+            else:
+                close(p, None)
 
         # a hand-over continues in the same place: copy the location back to the
         # earlier segment ("16 תחילת ליווי רון" ... "המשך ליווי רון" ... "23 בדיקה לרון c1")

@@ -191,3 +191,20 @@ def test_end_for_everyone_closes_all_open_escorts(ref, settings):
                                 msg("10:14", DANA, "13 סיום ליווי מחסן לכולם")])
     assert [(hm(r.start), hm(r.end)) for r in rows_of(res, ESCORT)] == [("10:09", "10:13")] * 2
     assert not res.issues or all("כולם" not in i.message for i in res.issues)
+
+
+def test_continue_escort_after_exit_check_starts_a_new_one(ref, settings):
+    res = build(ref, settings, [msg("09:40", AVI, "37 תחילת ליווי רון c1"),
+                                msg("09:43", AVI, "42 בדיקה רון c1"),
+                                msg("09:48", AVI, "47 המשך ליווי רון c1"),
+                                msg("10:29", NOA, "29 בדיקה לרון c1")])
+    esc = [(hm(r.start), hm(r.end)) for r in rows_of(res, ESCORT)]
+    assert esc == [("09:37", "09:42"), ("09:47", "10:29")]
+
+
+def test_escort_without_end_closes_at_the_exit_check_in_the_other_zone(ref, settings):
+    res = build(ref, settings, [msg("12:21", AVI, "21 תחילת ליווי רון c2"),
+                                msg("12:36", AVI, "33-35-c1-בדיקה רון")])
+    (r,) = rows_of(res, ESCORT)
+    assert (r.comment, hm(r.start), hm(r.end)) == ("Escort C2 : Ron Shani", "12:21", "12:35")
+    assert r.flags and not r.fix

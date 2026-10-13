@@ -11,6 +11,9 @@ import openpyxl
 from .models import OUR_ACTIONS, Row, fmt_seconds
 
 FIELDS = ("shift", "officer", "action", "D", "E", "F", "G", "comment")
+# wrong dropdown choices seen in the manual DARs (two January days used "Patrol: Virtual"
+# for every round); compared as the action that was meant
+ACTION_ALIASES = {"Patrol: Virtual": "Patrol: Interior"}
 
 
 @dataclass
@@ -136,6 +139,7 @@ def load_actual(path: str | Path, days: list[date] | None = None,
             if all(v in (None, "") for v in r[:7]):
                 continue
             action = r[2].strip() if isinstance(r[2], str) else r[2]
+            action = ACTION_ALIASES.get(action, action)
             if action not in OUR_ACTIONS:
                 oos += 1
                 continue
