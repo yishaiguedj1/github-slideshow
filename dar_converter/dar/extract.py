@@ -192,6 +192,7 @@ class Extractor:
         self.scan_minutes = scan_minutes      # average scan when only one time is given
         self.loc_patterns = location_patterns(ref)
         self._signature: str | None = None
+        self._on = None              # date of the message: officers who left are not matched
 
     # ------------------------------------------------------------ public API
     def extract(self, msg: Message) -> list[Event]:
@@ -200,6 +201,7 @@ class Extractor:
         events: list[Event] = []
         hour_ctx: int | None = None
         self._anchor = None          # explicit "HH:MM" seen earlier in this message
+        self._on = msg.ts.date()
         sender_officer = self.ref.sender_officer(msg.sender)
         for raw in msg.text.split("\n"):
             line = raw.strip()
@@ -556,7 +558,7 @@ class Extractor:
             for a in multi:
                 n = a.count(" ") + 1
                 cand = " ".join(words[i:i + n])
-                m = self.ref.lookup_phrase(cand) if n > 1 else None
+                m = self.ref.lookup_phrase(cand, on=self._on) if n > 1 else None
                 if m and norm_token(cand).endswith(a):
                     joined = (cand, m, n)
                     break
@@ -578,7 +580,7 @@ class Extractor:
                     and i + 1 < len(out) and out[i + 1][1] == "escort":
                 out[i] = (w, "end", None)
             elif kind == "officer_hint" and i and out[i - 1][1] in ("person", "officer"):
-                m = self.ref.lookup(out[i - 1][0], prefer="officer", fuzzy=False)
+                m = self.ref.lookup(out[i - 1][0], prefer="officer", fuzzy=False, on=self._on)
                 if m and m.kind == "officer":
                     out[i - 1] = (out[i - 1][0], "officer", m.name)
         return out
@@ -592,7 +594,7 @@ class Extractor:
         loc = self.ref.location(k)
         if loc:
             return (w, "location", loc)
-        m = self.ref.lookup(k, fuzzy=False)
+        m = self.ref.lookup(k, fuzzy=False, on=self._on)
         if m:
             return (w, m.kind, m.name)
         if len(k) > 2 and k[0] in PREFIXES:                 # "לסריקה", "בסיום", "מבחוץ"
@@ -605,10 +607,10 @@ class Extractor:
             if len(hits) == 1:
                 return (w, *hits.pop())
         if "§" in k:                                         # "מנ1ה": one unreadable letter
-            m = self.ref.lookup_wildcard(k, "§")
+            m = self.ref.lookup_wildcard(k, "§", on=self._on)
             if m:
                 return (w, m.kind, m.name)
-        m = self.ref.lookup(k)
+        m = self.ref.lookup(k, on=self._on)
         if m:
             return (w, m.kind, m.name)
         if re.fullmatch(r"[֐-׿§]{2,}", k):
@@ -619,7 +621,7 @@ class Extractor:
         """An unknown name where only an officer fits (scanner / checker): accept a one-letter
         typo of an officer's name ("יונתם", "עידן", "יש")."""
         if name and name.startswith("?"):
-            o = self.ref.officer_fuzzy(name[1:])
+            o = self.ref.officer_fuzzy(name[1:], on=self._on)
             if o:
                 e.info.append(f"'{name[1:]}' זוהה כ-{o} (שגיאת כתיב)")
                 return o
@@ -630,8 +632,8 @@ class Extractor:
         Hebrew prefix ("דנה", not "לדנה" - that one is a checked person)."""
         word, kind, val = tok
         if kind == "unknown_name":
-            return self.ref.officer_fuzzy(val[1:])
-        m = self.ref.lookup(word, prefer="officer", fuzzy=False)
+            return self.ref.officer_fuzzy(val[1:], on=self._on)
+        m = self.ref.lookup(word, prefer="officer", fuzzy=False, on=self._on)
         if m and m.kind == "officer" and (not bare or m.via == "exact"):
             return m.name
         return None

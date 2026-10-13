@@ -99,7 +99,7 @@ def main_rows(res: DayResult, s: Settings) -> list[Row]:
     return [r for r in res.rows if r.confidence >= th]
 
 
-DAY_FIX_ISSUES = ("no_supervisor", "roster")
+DAY_FIX_ISSUES = ("roster",)          # a missing supervisor gets its own red Shift 1 row
 
 
 def write_dar(wb, results: list[DayResult], s: Settings) -> dict[tuple[date, int], int]:
@@ -219,6 +219,20 @@ def write_review(path: str | Path, results: list[DayResult], where: dict, s: Set
         un.append([e.msg.ts.strftime("%d/%m/%Y"), e.msg.ts.strftime("%H:%M"), e.msg.sender,
                    e.line, "\n".join(e.notes), e.msg.text, e.msg.id])
     _wrap(un)
+
+    auto = _sheet(wb, "שורות שנוספו אוטומטית",
+                  ["תאריך", "לשונית", "שורה ב-DAR", "Shift", "Officer", "Action", "Time Started",
+                   "Time Ended", "Comments/Notes", "למה", "הודעות מקור"],
+                  [11, 8, 10, 9, 18, 18, 11, 11, 42, 40, 70])
+    for res in results:
+        for r in res.rows:
+            if r.inferred:
+                _, _, f, g = r.times_seconds()
+                auto.append([res.day.strftime("%d/%m/%Y"), day_sheet_name(res.day),
+                             where.get((res.day, r.seq)) or "", r.shift, r.officer, r.action,
+                             fmt_seconds(f), fmt_seconds(g), r.comment, "\n".join(r.info),
+                             sources_text(r.sources)])
+    _wrap(auto)
 
     ros = _sheet(wb, "מאבטחים ביום", ["תאריך", "Shift", "Officer", "התחלה", "סיום", "הוסק", "הערה"],
                  [11, 9, 20, 8, 8, 6, 40])

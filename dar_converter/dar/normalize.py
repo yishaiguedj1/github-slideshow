@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 import yaml
@@ -49,11 +50,14 @@ class Reference:
                 "priority": o.get("shift_priority", 100 + i),
                 "supervisor": bool(o.get("supervisor", False)),
             }
+            if o.get("left"):                    # left the team: not matched from that date on
+                ref.officers[o["name"]]["left"] = _as_date(o["left"])
         for p in data.get("people", []) or []:
             ref.people[p["name"]] = {"aliases": [str(a) for a in p.get("aliases", [])],
                                      "escort": bool(p.get("escort", True))}
-            if p.get("default_location"):
-                ref.people[p["name"]]["default_location"] = p["default_location"]
+            for key in ("default_location", "default_minutes"):
+                if p.get(key):
+                    ref.people[p["name"]][key] = p[key]
         ref.senders = {str(k): v for k, v in (data.get("senders") or {}).items()}
         locs = data.get("locations")
         if locs:
@@ -69,12 +73,13 @@ class Reference:
     def to_dict(self) -> dict:
         return {
             "officers": [{"name": n, "aliases": v["aliases"], "shift_priority": v["priority"],
-                          **({"supervisor": True} if v.get("supervisor") else {})}
+                          **({"supervisor": True} if v.get("supervisor") else {}),
+                          **({"left": v["left"].isoformat()} if v.get("left") else {})}
                          for n, v in sorted(self.officers.items(), key=lambda kv: kv[1]["priority"])],
             "senders": dict(self.senders),
             "people": [{"name": n, "aliases": v["aliases"],
                         **({"escort": False} if v.get("escort") is False else {}),
-                        **({"default_location": v["default_location"]} if v.get("default_location") else {})}
+                        **({k: v[k] for k in ("default_location", "default_minutes") if v.get(k)})}
                        for n, v in self.people.items()],
             "locations": self.locations,
         }
@@ -136,6 +141,18 @@ class Reference:
     def default_location(self, person: str) -> str | None:
         return self.people.get(person, {}).get("default_location")
 
+    def default_minutes(self, person: str) -> int | None:
+        """Usual length of the person's visit (the cleaner: about an hour), used when no exit
+        is reported."""
+        v = self.people.get(person, {}).get("default_minutes")
+        return int(v) if v else None
+
+    def active(self, cand: tuple[str, str], on: date | None) -> bool:
+        """False for an officer who had left the team by `on`."""
+        name, kind = cand
+        left = self.officers.get(name, {}).get("left") if kind == "officer" else None
+        return not (left and on and on >= left)
+
     def priority(self, officer: str) -> int:
         return self.officers.get(officer, {}).get("priority", 999)
 
@@ -155,29 +172,34 @@ class Reference:
                 return m.name
         return None
 
-    def lookup(self, token: str, prefer: str | None = None, fuzzy: bool = True) -> Match | None:
-        """Resolve one Hebrew/English token to a canonical name."""
+    def _cands(self, key: str, on: date | None) -> list[tuple[str, str]] | None:
+        return [c for c in self._alias.get(key, []) if self.active(c, on)] or None
+
+    def lookup(self, token: str, prefer: str | None = None, fuzzy: bool = True,
+               on: date | None = None) -> Match | None:
+        """Resolve one Hebrew/English token to a canonical name (as of the date `on`)."""
         key = norm_token(token)
         if not key:
             return None
-        hit = self._pick(self._alias.get(key), prefer)
+        hit = self._pick(self._cands(key, on), prefer)
         if hit:
             return Match(hit[0], hit[1], 1.0, "exact")
         # strip up to two Hebrew prefix letters: "לרון", "ורון", "ולרון"
         for n in (1, 2):
             if len(key) > n + 1 and all(ch in PREFIXES for ch in key[:n]):
-                hit = self._pick(self._alias.get(key[n:]), prefer)
+                hit = self._pick(self._cands(key[n:], on), prefer)
                 if hit:
                     return Match(hit[0], hit[1], 1.0, "prefix")
         if fuzzy and len(key) >= 4:
             cands = {cand for alias, cands in self._alias.items()
-                     if len(alias) >= 3 and one_edit(key, alias) for cand in cands}
+                     if len(alias) >= 3 and one_edit(key, alias) for cand in cands
+                     if self.active(cand, on)}
             if len(cands) == 1:
                 name, kind = cands.pop()
                 return Match(name, kind, 0.7, "fuzzy")
         return None
 
-    def officer_fuzzy(self, token: str) -> str | None:
+    def officer_fuzzy(self, token: str, on: date | None = None) -> str | None:
         """An officer's name with a one-letter typo ("יונתם", "עידן", "יש"). Used only where
         the grammar expects an officer (the scanner / checker of a round)."""
         key = norm_token(token)
@@ -185,31 +207,33 @@ class Reference:
             return None
         found = {name for alias, cands in self._alias.items()
                  if len(alias) >= 3 and one_edit(key, alias)
-                 for name, kind in cands if kind == "officer"}
+                 for name, kind in cands if kind == "officer" and self.active((name, kind), on)}
         return found.pop() if len(found) == 1 else None
 
-    def lookup_wildcard(self, token: str, wildcard: str) -> Match | None:
+    def lookup_wildcard(self, token: str, wildcard: str, on: date | None = None) -> Match | None:
         """A name with one unreadable letter ("מנ§ה" -> "מנקה"); Hebrew prefixes allowed."""
         key = norm_token(token)
         for n in (0, 1):
             if n and not (len(key) > 3 and key[0] in PREFIXES):
                 continue
             pat = re.compile("^" + re.escape(key[n:]).replace(re.escape(wildcard), ".") + "$")
-            found = {c for alias, cands in self._alias.items() if pat.match(alias) for c in cands}
+            found = {c for alias, cands in self._alias.items() if pat.match(alias) for c in cands
+                     if self.active(c, on)}
             if len(found) == 1:
                 name, kind = found.pop()
                 return Match(name, kind, 0.7, "fuzzy")
         return None
 
-    def lookup_phrase(self, phrase: str, prefer: str | None = None) -> Match | None:
+    def lookup_phrase(self, phrase: str, prefer: str | None = None,
+                      on: date | None = None) -> Match | None:
         """Multi-word aliases such as 'רון שני' or 'צוות ניקיון'."""
         key = norm_token(phrase)
-        hit = self._pick(self._alias.get(key), prefer)
+        hit = self._pick(self._cands(key, on), prefer)
         if hit:
             return Match(hit[0], hit[1], 1.0, "exact")
         for n in (1, 2):
             if len(key) > n + 1 and all(ch in PREFIXES for ch in key[:n]):
-                hit = self._pick(self._alias.get(key[n:]), prefer)
+                hit = self._pick(self._cands(key[n:], on), prefer)
                 if hit:
                     return Match(hit[0], hit[1], 1.0, "prefix")
         return None
@@ -245,6 +269,10 @@ class Reference:
                     if len(a) >= 4 and re.fullmatch(r"[\u0590-\u05FF]+", a) and one_edit(v, a):
                         return label
         return None
+
+
+def _as_date(v) -> date:
+    return v if isinstance(v, date) else date.fromisoformat(str(v))
 
 
 def norm_token(text: str) -> str:

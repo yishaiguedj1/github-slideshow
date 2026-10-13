@@ -21,7 +21,7 @@ times:
   d_offset_seconds: 60         # D (request) = F - 60s
   e_offset_seconds: 30         # E (dispatch) = F - 30s
   single_minute: 1             # "44 בדיקה לרון" -> F=43, G=44 (employees and officers)
-  check_minutes_contractor: 1  # one-time check of a visitor / contractor (past entries: 1 min in 75%)
+  check_minutes_contractor: 2  # one-time check of a visitor / contractor (the user's choice)
   scan_minutes: 3              # average scan, used when only one time was reported
   future_tolerance: 2          # minutes a reported time may exceed the send time
 
@@ -30,15 +30,16 @@ rules:
   join_max_gap: 3              # minutes between the two zones of one round
   join_mode: auto              # auto: gap 1 -> C1 starts at C2 end, gap 2-3 -> boundary C2 end + 1
                                # also: c1_starts_at_c2_end | c2_ends_at_c1_start
-  infer_missing_zone: false    # when only C2 was reported: add a flagged C1 row
-  infer_missing_zone_minutes: 3
+  infer_missing_zone: true     # a round that reported one zone only: add the other one (no mark)
+  infer_missing_zone_minutes: 3  # lone C2 -> C1 from its end; lone C1 -> C2 up to its start
   merge_scan_and_check_gap: 0  # 0 = keep "37-40 X סרק" and "43 בדיקה לX" as separate rows
   busy_checker_last_minute: false  # checker busy during the scan -> search = last minute
   escort_start_without_time: message_time
 
 roster:
-  default_supervisor: auto          # Shift 1 when no supervisor shows up in the chat:
-                                    # auto = the first supervisor of the reference, null = leave empty
+  default_supervisor: null          # Shift 1 when no supervisor shows up in the chat:
+                                    # null = an empty Shift 1 row marked for a fix (the user's choice),
+                                    # auto = the first supervisor of the reference
   supervisor_max_scans: 11           # a supervisor who scans more than this acts as a guard
 
 badges:                        # header cells C4 / C5 on days with activity (null = leave empty)

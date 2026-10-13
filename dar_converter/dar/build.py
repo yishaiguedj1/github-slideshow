@@ -290,20 +290,24 @@ class Builder:
                 break
 
     def _infer_missing_zone(self, evs: list[Event], res: DayResult) -> None:
+        """A round that reported one zone only: add the other one, as the manual entries do -
+        a lone C2 is followed by C1 (from the C2 end), a lone C1 follows C2 (up to the C1 start)."""
         if not self.s.get("rules.infer_missing_zone", False):
             return
         minutes = int(self.s.get("rules.infer_missing_zone_minutes", 3))
-        scans = [e for e in evs if e.kind == "scan" and not e.used and e.partner
-                 and e.zone in ZONES and e.end is not None]
-        for a in scans:
+        scans = [e for e in evs if e.kind == "scan" and not e.used and e.zone in ZONES
+                 and e.start is not None and e.end is not None]
+        for a in [e for e in scans if e.partner]:
             other = "C1" if a.zone == "C2" else "C2"
-            if any(b.actor == a.actor and b.zone == other and b.start is not None
-                   and abs(b.start - a.end) <= 15 for b in scans):
+            # the other zone may have been scanned by someone else (e.g. the escorting officer)
+            if any(b.zone == other and (abs(b.start - a.end) <= 15 or abs(a.start - b.end) <= 15)
+                   for b in scans):
                 continue
-            evs.append(Event("scan", a.msg, a.line, day=a.day, start=a.end, end=a.end + minutes,
-                             zone=other, actor=a.actor, partner=a.partner, confidence=MEDIUM,
-                             notes=[f"{other} לא דווח - נוסף לפי ההגדרה infer_missing_zone"],
-                             inferred=True))
+            start, end = (a.end, a.end + minutes) if a.zone == "C2" else (a.start - minutes, a.start)
+            e = Event("scan", a.msg, a.line, day=a.day, start=start, end=end, zone=other,
+                      actor=a.actor, partner=a.partner, confidence=a.confidence, inferred=True)
+            e.info.append(f"{other} לא דווח בסבב - נוסף אוטומטית ({minutes} דק')")
+            evs.append(e)
 
     def _mark_missing_zone(self, evs: list[Event], rows: list[Row]) -> None:
         """A checked scan of one zone with no scan of the other zone around it."""
@@ -575,7 +579,11 @@ class Builder:
             r.info.extend(seg["info"])
             if comment is None:
                 r.flag("מיקום או שם המלווה לא ידועים - ההערה נשארה ריקה", LOW)
-            if e is None:
+            usual = self.ref.default_minutes(name) if name else None
+            if e is None and usual and s is not None:
+                r.end = s + usual                    # "המנקה נכנסה למשרד" with no exit message
+                r.flag(f"לא דווחה יציאה - הסיום משוער ({usual} דק' אחרי הכניסה)", MEDIUM)
+            elif e is None:
                 r.flag("לא נמצא סיום ליווי - שעת הסיום נשארה ריקה", MEDIUM)
             rows.append(r)
         return rows
@@ -648,7 +656,9 @@ class Builder:
             taken.add(sup)
         elif sup is None:
             res.issues.append(Issue(day, "no_supervisor",
-                                    "לא זוהה מפקח (Shift 1) בצ'אט - להוסיף ידנית את שורת ה-Assumed Post שלו"))
+                                    "לא זוהה מפקח (Shift 1) בצ'אט - להשלים את שם המפקח"))
+            roster.append(RosterEntry("", 1, day_start, day_end, True,
+                                      "לא זוהה מפקח בצ'אט - להשלים מי היה Shift 1"))
         else:
             late = [o for o in officers if o != sup and self.ref.is_supervisor(o)
                     and hrs[o] == afternoon and scans[o] <= guard_like
@@ -708,8 +718,12 @@ class Builder:
     def _assumed_post_rows(self, day: date, roster: list[RosterEntry]) -> list[Row]:
         rows = []
         for r in sorted(roster, key=lambda r: (r.start, r.slot)):
-            row = self._row(day, ASSUMED_POST, r.officer, r.start, r.end, None, [])
-            if r.inferred:
+            row = self._row(day, ASSUMED_POST, r.officer or None, r.start, r.end, None, [])
+            if not r.officer:                         # nobody to put in Shift 1
+                row.shift = f"Shift {r.slot}"
+                row.need_fix(r.note)
+                row.confidence = LOW
+            elif r.inferred:
                 row.flag(r.note or "שעות העמדה הוסקו", MEDIUM)
             rows.append(row)
         return rows

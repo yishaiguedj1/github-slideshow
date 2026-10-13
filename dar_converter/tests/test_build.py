@@ -56,11 +56,11 @@ def test_scan_start_only_gets_average_length(ref, settings):
 def test_contractor_check_minutes_follow_settings(ref, settings):
     msgs = [msg("11:50", NOA, "50 בדיקה לרון c2"),       # visitor (escorted)
             msg("11:52", NOA, "52 בדיקה לגיל c2")]       # employee / officer
-    s1, s2 = rows_of(build(ref, settings, msgs), SEARCH)
-    assert (hm(s1.start), hm(s1.end)) == ("11:49", "11:50")
-    assert (hm(s2.start), hm(s2.end)) == ("11:51", "11:52")
-    s1, s2 = rows_of(build(ref, settings, msgs, {"times": {"check_minutes_contractor": 2}}), SEARCH)
+    s1, s2 = rows_of(build(ref, settings, msgs), SEARCH)              # contractor: 2 minutes
     assert (hm(s1.start), hm(s1.end)) == ("11:48", "11:50")
+    assert (hm(s2.start), hm(s2.end)) == ("11:51", "11:52")
+    s1, s2 = rows_of(build(ref, settings, msgs, {"times": {"check_minutes_contractor": 1}}), SEARCH)
+    assert (hm(s1.start), hm(s1.end)) == ("11:49", "11:50")
     assert (hm(s2.start), hm(s2.end)) == ("11:51", "11:52")
 
 
@@ -115,17 +115,17 @@ def test_supervisor_is_shift_1_and_others_by_priority(ref, settings):
     assert res.rows[0].action == ASSUMED_POST and res.rows[0].d_e_f[0] == 7 * 3600
 
 
-def test_no_supervisor_in_chat_gets_the_default_supervisor(ref, settings):
+def test_no_supervisor_in_chat_leaves_a_red_shift_1(ref, settings):
     msgs = [msg("07:46", NOA, "39-42 אבי סרק נועה בדקה c2"),
             msg("17:46", NOA, "39-42 אבי סרק נועה בדקה c2")]
-    res = build(ref, settings, msgs)                  # default_supervisor: auto
+    res = build(ref, settings, msgs)                  # default_supervisor: null
+    ap = rows_of(res, ASSUMED_POST)
+    assert [(r.shift, r.officer) for r in ap] == [("Shift 1", None), ("Shift 2", "Avi Levi"),
+                                                   ("Shift 3", "Noa Bar")]
+    assert ap[0].fix and not ap[1].fix and any(i.kind == "no_supervisor" for i in res.issues)
+    res = build(ref, settings, msgs, {"roster": {"default_supervisor": "auto"}})
     ap = [(r.shift, r.officer) for r in rows_of(res, ASSUMED_POST)]
     assert ap == [("Shift 1", "Dana Cohen"), ("Shift 2", "Avi Levi"), ("Shift 3", "Noa Bar")]
-    assert rows_of(res, ASSUMED_POST)[0].flags        # assumed, not seen in the chat
-    res = build(ref, settings, msgs, {"roster": {"default_supervisor": None}})
-    ap = [(r.shift, r.officer) for r in rows_of(res, ASSUMED_POST)]
-    assert ap == [("Shift 2", "Avi Levi"), ("Shift 3", "Noa Bar")]
-    assert any(i.kind == "no_supervisor" for i in res.issues)
 
 
 def test_namesake_employee_vs_officer(ref, settings):
@@ -164,9 +164,47 @@ def test_unknown_person_is_marked_for_fix_but_known_one_is_clean(ref, settings):
     assert unknown.confidence < 0.6 and any("צביקה" in f for f in unknown.fix)
 
 
-def test_one_zone_with_checker_is_marked(ref, settings):
-    res = build(ref, settings, [msg("13:51", NOA, "48-51 אבי סרק נועה בדקה c2")])
+def test_round_with_one_zone_gets_the_other_zone(ref, settings):
+    res = build(ref, settings, [msg("13:51", NOA, "48-51 אבי סרק נועה בדקה c2"),     # lone C2
+                                msg("15:21", NOA, "18-21 אבי סרק נועה בדקה c1")])    # lone C1
+    got = [(r.action, hm(r.start), hm(r.end), r.comment, r.inferred) for r in res.rows
+           if r.action in (PATROL, SEARCH)]
+    ms = "Metal screening {} : Avi Levi - Declined to sit"
+    assert got == [(PATROL, "13:48", "13:51", "Routine Patrol", False),
+                   (SEARCH, "13:48", "13:51", ms.format("C2"), False),
+                   (PATROL, "13:51", "13:54", "Routine Patrol", True),
+                   (SEARCH, "13:51", "13:54", ms.format("C1"), True),
+                   (PATROL, "15:15", "15:18", "Routine Patrol", True),
+                   (SEARCH, "15:15", "15:18", ms.format("C2"), True),
+                   (PATROL, "15:18", "15:21", "Routine Patrol", False),
+                   (SEARCH, "15:18", "15:21", ms.format("C1"), False)]
+    assert not any(r.fix or r.flags for r in res.rows if r.inferred)       # added without a mark
+
+
+def test_other_zone_scanned_by_someone_else_is_not_added(ref, settings):
+    res = build(ref, settings, [msg("13:51", NOA, "48-51 אבי סרק נועה בדקה c2"),
+                                msg("13:56", DANA, "52-55 גיל סרק דנה בדקה c1")])
+    assert not any(r.inferred for r in res.rows)
+
+
+def test_one_zone_is_marked_when_inference_is_off(ref, settings):
+    res = build(ref, settings, [msg("13:51", NOA, "48-51 אבי סרק נועה בדקה c2")],
+                {"rules": {"infer_missing_zone": False}})
     assert all(any("C1" in f for f in r.fix) for r in rows_of(res, PATROL) + rows_of(res, SEARCH))
+
+
+def test_cleaner_escort_without_exit_ends_after_her_usual_visit(ref, settings):
+    res = build(ref, settings, [msg("11:55", DANA, "54 המנקה נכנסה למשרד")])
+    (r,) = rows_of(res, ESCORT)
+    assert (r.comment, hm(r.start), hm(r.end)) == ("Escort Office : Mira Katz", "11:54", "12:54")
+    assert r.flags and not r.fix
+
+
+def test_officer_who_left_is_not_matched_any_more(ref, settings):
+    from dar.extract import extract_all
+    before = extract_all([msg("10:10", DANA, "09 בדיקה לאלי c1", day=DAY.replace(month=2))], ref)
+    after = extract_all([msg("10:10", DANA, "09 בדיקה לאלי c1")], ref)
+    assert before[0].subjects == ["Eli Tal"] and after[0].subjects == ["?אלי"]
 
 
 def test_several_people_in_one_check_get_consecutive_minutes(ref, settings):

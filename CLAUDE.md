@@ -80,14 +80,23 @@ has them. The container is deleted when the session ends.
 ## Rules that came from the user (do not change without asking)
 
 - Only scans, checks, escorts and Assumed Post rows. Alarms, admin notes and Night Owl rows
-  belong to the camera company.
-- Scan and check are separate rows. A check takes 1 minute (a contractor too, unless the
-  report gives a range).
+  belong to the camera company. Storage scans are never written; escorts in the office and
+  the storage room are written like C1 / C2 ("Escort Office : ...", "Escort Storage : ...").
+- Scan and check are separate rows. A check takes 1 minute; a contractor / visitor check with
+  one reported time takes 2 minutes. A scan with one reported time takes 3 minutes.
 - Shift 1 is the supervisor; posts come from the hours each officer reported (07-13 / 13-19 /
-  full day); holiday eves end at 14:00 (`config/settings.yaml` -> `day.holidays`).
-- A round that reported only one zone (C2 without C1) is marked red - the missing zone is not
-  invented (`rules.infer_missing_zone: false`).
-- No guessing: an unclear field stays empty and the row is marked red. Minute-level precision
-  is not critical; a clean, readable sheet is.
+  full day); Shift 2 / Shift 3 follow the fixed order of `shift_priority`; holiday eves end
+  at 14:00 (`config/settings.yaml` -> `day.holidays`). A day with no supervisor in the chat
+  gets an empty Shift 1 row marked red (the user fills it in).
+- A round that reported only one zone gets the other zone added, without a mark: a lone C2 is
+  followed by C1 (3 minutes from its end), a lone C1 follows C2 - unless another officer
+  scanned that zone within 15 minutes. The review file lists every added row.
+- The cleaner's escort with no exit report ends an hour after she came in, with a cell note
+  (`default_minutes` in the reference). Her comment uses her name as written in the reference.
+- Officers who left the team have a `left` date in the reference and are not matched after it.
+- Unclear fields stay empty and the row is marked red. Minute-level precision is not critical;
+  a clean, readable sheet is.
+- Output: a separate copy of the month's official sheet in the user's Drive (never the
+  official sheet itself unless asked).
 - Days entered by the other supervisor are reference only, not the basis (they use other
   D/E offsets and comment wording).

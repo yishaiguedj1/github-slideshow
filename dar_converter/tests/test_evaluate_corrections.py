@@ -39,7 +39,8 @@ def test_actual_loader_and_field_diffs(tmp_path, ref, settings):
     assert len(got) == 2 and oos == 1
     assert got[0].times[1] == (7 * 60 + 38) * 60          # E evaluated from the formula
 
-    res = Builder(ref, settings).build_day(DAY, extract_all([msg("07:46", NOA, "39-42 אבי סרק נועה בדקה c2")], ref))
+    one_zone_only = settings.with_overrides({"rules": {"infer_missing_zone": False}})
+    res = Builder(ref, one_zone_only).build_day(DAY, extract_all([msg("07:46", NOA, "39-42 אבי סרק נועה בדקה c2")], ref))
     ev = compare_day(DAY, [r for r in res.rows if r.action != "Assumed Post"], got, oos)
     assert len(ev.pairs) == 2 and not ev.missing and not ev.extra
     # the sheet has no D, E is F-60s there (ours F-30s) and only 2 officers -> Shift 1/2 for us

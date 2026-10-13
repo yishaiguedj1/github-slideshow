@@ -22,6 +22,10 @@ officers:
   - name: Omer Paz               # shares the alias עומר with the visitor Omer Gold
     aliases: [עומר]
     shift_priority: 5
+  - name: Eli Tal                # left the team: from this date "אלי" is not matched to him
+    aliases: [אלי]
+    shift_priority: 6
+    left: 2026-03-01
 
 senders:
   "דנה - עבודה": Dana Cohen
@@ -39,6 +43,8 @@ people:
     escort: false
   - name: Mira Katz
     aliases: [מירה, המנקה]
+    default_location: Office
+    default_minutes: 60           # usual visit: with no exit report, the escort ends an hour later
   - name: Omer Gold               # escorted visitor; in escort lines "עומר" is him
     aliases: [עומר]
 
