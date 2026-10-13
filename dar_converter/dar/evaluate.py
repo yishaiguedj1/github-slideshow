@@ -104,6 +104,17 @@ def _row_times(vals: dict) -> tuple:
     return tuple(out[c] for c in "DEFG")
 
 
+def user_days(path: str | Path, who: str) -> list[date]:
+    """Days where `who` opens the day as Shift 1 and the sheet has more than Assumed Post rows."""
+    out = []
+    for d, (rows, _) in load_actual(path).items():
+        ap = [r for r in rows if r.action == "Assumed Post"]
+        work = [r for r in rows if r.action != "Assumed Post"]
+        if ap and work and norm_name(ap[0].officer) == norm_name(who):
+            out.append(d)
+    return sorted(out)
+
+
 def load_actual(path: str | Path, days: list[date] | None = None,
                 first_row: int = 10) -> dict[date, tuple[list[ActualRow], int]]:
     """-> {day: (rows of our actions, number of out-of-scope rows)}"""
@@ -113,7 +124,10 @@ def load_actual(path: str | Path, days: list[date] | None = None,
         if not re.fullmatch(r"\d{4}", ws.title):
             continue
         year = _guess_year(wb)
-        d = date(year, int(ws.title[:2]), int(ws.title[2:]))
+        try:
+            d = date(year, int(ws.title[:2]), int(ws.title[2:]))
+        except ValueError:                 # e.g. a "0229" tab in a non-leap year
+            continue
         if days is not None and d not in days:
             continue
         rows, oos = [], 0
@@ -149,11 +163,33 @@ def _s(v) -> str | None:
 
 
 # ------------------------------------------------------------------ comparison
+_CANON: dict[str, str] = {}
+
+
+def set_reference(ref) -> None:
+    """Compare people by identity: every English spelling listed in reference.yaml
+    ("Noah Bar" / "Noa Bar", "Katz, Mira" / "Mira Katz") counts as the same person."""
+    _CANON.clear()
+    if ref is None:
+        return
+    for table in (ref.officers, ref.people):
+        for name, info in table.items():
+            for alias in [name, *info["aliases"]]:
+                if re.search(r"[A-Za-z]", alias):
+                    _CANON[_tokens(alias)] = _tokens(name)
+            # "Last, First" and "First Last" spellings of the canonical name
+            _CANON[_tokens(name)] = _tokens(name)
+
+
+def _tokens(n: str) -> str:
+    return " ".join(sorted(re.sub(r"[^\w\s]", " ", n.lower()).split()))
+
+
 def norm_name(n: str | None) -> str:
     if not n:
         return ""
-    toks = re.sub(r"[^\w\s]", " ", n.lower()).split()
-    return " ".join(sorted(toks))
+    key = _tokens(n)
+    return _CANON.get(key, key)
 
 
 def norm_comment(c: str | None) -> str:
@@ -242,7 +278,8 @@ def compare_day(day: date, pred: list[Row], actual: list[ActualRow], oos: int,
 
 
 def evaluate(pred_by_day: dict[date, list[Row]], actual_by_day: dict, days: list[date],
-             fields: tuple[str, ...] = FIELDS) -> EvalResult:
+             fields: tuple[str, ...] = FIELDS, ref=None) -> EvalResult:
+    set_reference(ref)
     out = []
     for d in days:
         actual, oos = actual_by_day.get(d, ([], 0))

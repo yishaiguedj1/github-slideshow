@@ -120,8 +120,13 @@ class Reference:
     def is_supervisor(self, officer: str | None) -> bool:
         return bool(self.officers.get(officer, {}).get("supervisor"))
 
+    def default_supervisor(self) -> str | None:
+        """The supervisor with the highest shift priority (Shift 1 when nobody else is seen)."""
+        sups = [n for n, v in self.officers.items() if v.get("supervisor")]
+        return min(sups, key=self.priority) if sups else None
+
     def namesakes(self, name: str) -> list[tuple[str, str]]:
-        """Other canonical names that share a Hebrew alias with `name` (e.g. two people called אסף)."""
+        """Other canonical names that share a Hebrew alias with `name` (e.g. two people called גיל)."""
         out = []
         for alias, cands in self._alias.items():
             if any(c[0] == name for c in cands):
@@ -173,7 +178,7 @@ class Reference:
         return None
 
     def lookup_phrase(self, phrase: str, prefer: str | None = None) -> Match | None:
-        """Multi-word aliases such as 'בן דוד' or 'צוות ניקיון'."""
+        """Multi-word aliases such as 'רון שני' or 'צוות ניקיון'."""
         key = norm_token(phrase)
         hit = self._pick(self._alias.get(key), prefer)
         if hit:

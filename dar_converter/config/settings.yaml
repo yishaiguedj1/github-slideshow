@@ -14,14 +14,14 @@ day:
   end: "19:00"
   split_at: "13:00"            # a post can be split 07:00-13:00 / 13:00-19:00
   holiday_end: "14:00"         # holiday eves: 07:00-14:00
-  holidays: []                 # ["2026-09-20", ...] days that end at holiday_end
+  holidays: ["2026-05-21", "2026-09-20"]   # holiday eves on workdays (07:00-14:00)
   workdays: [6, 0, 1, 2, 3]    # Python weekday(): Sun=6, Mon=0 ... Thu=3
 
 times:
   d_offset_seconds: 60         # D (request) = F - 60s
   e_offset_seconds: 30         # E (dispatch) = F - 30s
   single_minute: 1             # "44 בדיקה לרון" -> F=43, G=44 (employees and officers)
-  check_minutes_contractor: 2  # one-time check of an escorted visitor / contractor: 2 minutes
+  check_minutes_contractor: 1  # one-time check of a visitor / contractor (past entries: 1 min in 75%)
   scan_minutes: 3              # average scan, used when only one time was reported
   future_tolerance: 2          # minutes a reported time may exceed the send time
 
@@ -35,6 +35,11 @@ rules:
   merge_scan_and_check_gap: 0  # 0 = keep "37-40 X סרק" and "43 בדיקה לX" as separate rows
   busy_checker_last_minute: false  # checker busy during the scan -> search = last minute
   escort_start_without_time: message_time
+
+roster:
+  default_supervisor: auto          # Shift 1 when no supervisor shows up in the chat:
+                                    # auto = the first supervisor of the reference, null = leave empty
+  supervisor_max_scans: 11           # a supervisor who scans more than this acts as a guard
 
 badges:                        # header cells C4 / C5 on days with activity (null = leave empty)
   employee: 48

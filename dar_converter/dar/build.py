@@ -144,35 +144,59 @@ class Builder:
 
     # ---------------------------------------------------------------- namesakes
     def _resolve_namesakes(self, evs: list[Event]) -> None:
-        """A checked / escorted name shared by an officer and an employee ("אסף").
+        """A checked / escorted name shared by an officer and another person (e.g. "גיל").
 
-        Only officers scan and check, so the officer is meant only when the check belongs to
-        his own work: right after his scan in that zone, or when he is relieved from an escort
-        in the same message. Otherwise (and always when he is the one checking) it is the
-        employee, who is checked a few times a day when entering C1 / C2.
+        Officers are never escorted, so in escort lines the name is the other person.
+        In a check:
+          - the officer never checks himself -> the other person;
+          - an escorted visitor namesake is meant only while that visitor is being escorted;
+          - an employee namesake (no escort) is meant unless the check belongs to the officer's
+            own work: right after his own scan in that zone, or an escort hand-over in the same
+            message. The employee is checked only a few times a day, entering C1 / C2.
         """
         handover_msgs = {e.msg.id for e in evs if e.kind in ("escort_handover", "escort_end")}
-        for e in evs:
-            if e.kind not in ("check", "escort_start", "escort_end", "escort_join",
-                              "escort_handover") or e.used:
+        escort_kinds = ("escort_start", "escort_end", "escort_join", "escort_handover")
+
+        def person_namesake(subj: str) -> str | None:
+            if not self.ref.is_officer(subj):
+                return None
+            others = [n for n, kind in self.ref.namesakes(subj) if kind == "person"]
+            return others[0] if others else None
+
+        for e in evs:                                   # pass 1: escort lines
+            if e.kind in escort_kinds and not e.used:
+                new = []
+                for subj in e.subjects:
+                    p = person_namesake(subj)
+                    if p:
+                        e.info.append(f"'{subj}' בליווי זוהה כ-{p}")
+                    new.append(p or subj)
+                e.subjects = new
+
+        for e in evs:                                   # pass 2: checks
+            if e.kind != "check" or e.used:
                 continue
             new = []
             for subj in e.subjects:
-                others = [n for n, kind in self.ref.namesakes(subj) if kind == "person"] \
-                    if self.ref.is_officer(subj) else []
-                if not others:
+                p = person_namesake(subj)
+                if not p:
                     new.append(subj)
                     continue
                 t = e.start if e.start is not None else e.end
-                after_own_scan = any(x.kind == "scan" and x.actor == subj and x.end is not None
-                                     and x.zone in (e.zone, None) and t is not None
-                                     and 0 <= t - x.end <= 5 for x in evs)
-                own_work = after_own_scan or e.msg.id in handover_msgs
-                if e.kind == "check" and e.actor != subj and own_work:
-                    new.append(subj)
+                if e.actor == subj:
+                    pick = p
+                elif self.ref.needs_escort(p):
+                    escorted = any(x.kind in escort_kinds and p in x.subjects and x.start is not None
+                                   and t is not None and 0 <= t - x.start <= 240 for x in evs)
+                    pick = p if escorted else subj
                 else:
-                    new.append(others[0])
-                    e.info.append(f"'{subj}' זוהה כ-{others[0]} לפי ההקשר")
+                    after_own_scan = any(x.kind == "scan" and x.actor == subj and x.end is not None
+                                         and x.zone in (e.zone, None) and t is not None
+                                         and 0 <= t - x.end <= 5 for x in evs)
+                    pick = subj if (after_own_scan or e.msg.id in handover_msgs) else p
+                if pick != subj:
+                    e.info.append(f"'{subj}' זוהה כ-{pick} לפי ההקשר")
+                new.append(pick)
             e.subjects = new
 
     # ---------------------------------------------------------------- scan starts
@@ -523,65 +547,114 @@ class Builder:
                                        hhmm(o["end"]) if o.get("end") else day_end))
             return out
 
+        # presence = officers who report or act (scan / check / escort); being only the
+        # subject of a check is not enough (it may be a namesake visitor)
         span: dict[str, list[int]] = {}
+        scans: dict[str, int] = defaultdict(int)
         for e in evs:
-            if e.kind in ("unknown", "chatter", "ignore") or (e.used and e.kind != "scan_start"):
+            if e.kind in ("unknown", "chatter", "ignore", "storage") or (e.used and e.kind != "scan_start"):
                 continue
             t0 = e.start if e.start is not None else e.end
             t1 = e.end if e.end is not None else e.start
             if t0 is None:
                 continue
-            people = [e.actor, e.partner] + [s for s in e.subjects]
-            for o in people:
+            for o in (e.actor, e.partner):
                 if o and self.ref.is_officer(o):
                     sp = span.setdefault(o, [t0, t1])
                     sp[0], sp[1] = min(sp[0], t0), max(sp[1], t1)
+                    if e.kind == "scan":
+                        scans[o] += 1
         officers = sorted(span, key=self.ref.priority)
-        if not officers:
+        default_sup = self.s.get("roster.default_supervisor")
+        if default_sup == "auto":
+            default_sup = self.ref.default_supervisor()
+        if not officers and not default_sup:
             return []
 
-        # Shift 1 = the day's supervisor (may hardly scan); full day.
-        sups = [o for o in officers if self.ref.is_supervisor(o)]
+        # working hours = the hours of the officer's own reports (07-13 / 13-19 / full day)
+        def hours(o: str) -> tuple[int, int]:
+            if o not in span or not day_start < split < day_end or day_end - day_start < 9 * 60:
+                return day_start, day_end                  # short day (holiday eve): no split
+            first, last = span[o]
+            if first >= split - 45:
+                return split, day_end                      # arrived at 13:00
+            if last <= split + 45:
+                return day_start, split                    # left at 13:00
+            return day_start, day_end
+
+        hrs = {o: hours(o) for o in officers}
+        morning, afternoon, full = (day_start, split), (split, day_end), (day_start, day_end)
+        guard_like = int(self.s.get("roster.supervisor_max_scans", 11))
+
+        # Shift 1 = the supervisor. He hardly reports, so his day is 07-19, except when a
+        # second supervisor only arrives at 13:00 and the first one has no reports after
+        # 13:00 - then they split Shift 1. A supervisor who scans like a guard all day is a
+        # guard that day; if no supervisor is seen, the configured default one is assumed.
+        roster: list[RosterEntry] = []
+        taken: set[str] = set()
+        sups = [o for o in officers if self.ref.is_supervisor(o) and scans[o] <= guard_like
+                or (self.ref.is_supervisor(o) and self.ref.priority(o) == 1)]
         sup = sups[0] if sups else None
-        if sup is None:
+        if sup is None and default_sup:
+            sup = default_sup
+            roster.append(RosterEntry(sup, 1, day_start, day_end, True,
+                                      "המפקח לא מופיע בצ'אט היום - נרשם לפי ברירת המחדל"))
+            taken.add(sup)
+        elif sup is None:
             res.issues.append(Issue(day, "no_supervisor",
                                     "לא זוהה מפקח (Shift 1) בצ'אט - להוסיף ידנית את שורת ה-Assumed Post שלו"))
-        others = [o for o in officers if o != sup]
+        else:
+            late = [o for o in officers if o != sup and self.ref.is_supervisor(o)
+                    and hrs[o] == afternoon and scans[o] <= guard_like
+                    and (sup not in span or span[sup][1] <= split)]
+            if late:
+                roster.append(RosterEntry(sup, 1, day_start, split, True, "המפקח סיים ב-13:00"))
+                roster.append(RosterEntry(late[0], 1, split, day_end, True,
+                                          "מפקח אחר הצהריים (13:00-19:00)"))
+                taken |= {sup, late[0]}
+            else:
+                roster.append(RosterEntry(sup, 1, day_start, day_end))
+                taken.add(sup)
 
-        # working hours of the others = the hours of their own scans / checks
-        def hours(o: str) -> tuple[int, int]:
-            first, last = span[o]
-            if not day_start < split < day_end or day_end - day_start < 9 * 60:
-                return day_start, day_end                  # short day (holiday eve): no split
-            a = day_start if first < split - 45 else split
-            b = day_end if last > split + 45 else split
-            return (a, b) if a < b else (day_start, day_end)
-
-        hrs = {o: hours(o) for o in others}
-        groups: list[list[str]] = []
+        others = [o for o in officers if o not in taken]
+        # The supervisor left at noon (no reports of his after 13:00) while a supervisor-type
+        # guard stopped scanning at noon and a new guard arrived: that guard took over the
+        # supervision for the afternoon and stays on the full day; the newcomer is an extra.
+        sup1 = next((r for r in roster if r.slot == 1), None)
+        if sup1 and len([r for r in roster if r.slot == 1]) == 1 and \
+                (sup1.officer not in span or span[sup1.officer][1] <= split):
+            acting = [o for o in others if self.ref.is_supervisor(o) and hrs[o] == morning]
+            newcomers = [o for o in others if hrs[o] == afternoon]
+            if acting and newcomers:
+                sup1.end, sup1.inferred = split, True
+                sup1.note = "המפקח סיים ב-13:00 והמאבטח-מפקח המשיך עד הערב"
+                hrs[acting[0]] = full
+        # full-day officers by priority, then posts shared by a morning + an afternoon officer
         used: set[str] = set()
-        for a in others:                                   # morning + afternoon share a post
-            if a in used or hrs[a] != (day_start, split):
-                continue
-            for b in others:
-                if b not in used and b != a and hrs[b] == (split, day_end):
-                    groups.append([a, b])
-                    used |= {a, b}
-                    break
-        groups += [[o] for o in others if o not in used]
-        groups.sort(key=lambda g: min(self.ref.priority(o) for o in g))
-        if len(groups) > 2:
-            res.issues.append(Issue(day, "roster",
-                                    "יותר מאבטחים מעמדות - לבדוק את ה-Shift של: "
-                                    + ", ".join(o for g in groups[2:] for o in g)))
-
-        roster = []
-        if sup:
-            roster.append(RosterEntry(sup, 1, day_start, day_end))
-        for slot, g in enumerate(groups, start=2):
+        pairs: list[list[str]] = []
+        for a in [o for o in others if hrs[o] == morning]:
+            b = next((x for x in others if x not in used and x != a and hrs[x] == afternoon), None)
+            if b:
+                pairs.append([a, b])
+                used |= {a, b}
+            elif self.ref.is_supervisor(a):
+                hrs[a] = full          # a supervisor-type officer who stops scanning at noon
+        fulls = sorted([[o] for o in others if o not in used and hrs[o] == full],
+                       key=lambda g: self.ref.priority(g[0]))
+        used |= {g[0] for g in fulls}
+        rest = [[o] for o in others if o not in used]
+        ordered = fulls + pairs + rest
+        for i, g in enumerate(ordered):
+            slot = 2 + i
+            if slot > 3:
+                if all(hrs[o] != full for o in g):
+                    slot = 3                                # a partial post shares the last slot
+                else:
+                    res.issues.append(Issue(day, "roster",
+                                            "יותר מאבטחים מעמדות - לבדוק את ה-Shift של: " + ", ".join(g)))
             for o in sorted(g, key=lambda o: hrs[o][0]):
                 a, b = hrs[o]
-                partial = (a, b) != (day_start, day_end)
+                partial = (a, b) != full
                 roster.append(RosterEntry(o, slot, a, b, partial,
                                           "שעות העבודה הוסקו מהסריקות והבדיקות בצ'אט" if partial else ""))
         return roster

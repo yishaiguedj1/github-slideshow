@@ -287,7 +287,7 @@ class Extractor:
         if not e.subjects:
             e.note("לא צוין את מי בדקו", LOW)
         for s in e.subjects:
-            # a namesake employee ("אסף") is resolved later from the day's context
+            # a namesake employee ("גיל") is resolved later from the day's context
             if s == e.actor and not any(k == "person" for _, k in self.ref.namesakes(s)):
                 e.note("הבודק והנבדק אותו אדם - כנראה אדם אחר עם אותו שם", LOW)
         if len(e.subjects) > 1:

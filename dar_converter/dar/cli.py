@@ -85,20 +85,28 @@ def cmd_convert(args) -> int:
 
 def cmd_evaluate(args) -> int:
     s, msgs, ref, corr, ref_path = _load(args)
-    if args.days:
+    actual_path = Path(args.actual) if args.actual else s.path("template")
+    if args.days == "auto":
+        from .evaluate import set_reference, user_days
+        set_reference(ref)
+        who = ref.default_supervisor() if args.who == "auto" else args.who
+        days = user_days(actual_path, who)
+        if not days:
+            print("לא נמצאו ימים שבהם", who, "פותח כ-Shift 1")
+            return 1
+    elif args.days:
         days = [_date(d) for d in args.days.split(",")]
     else:
         days, d = [], args.date_from
         while d <= args.date_to:
             days.append(d)
             d += timedelta(days=1)
-    actual_path = Path(args.actual) if args.actual else s.path("template")
     rr = run(msgs, min(days), max(days), s, ref, corr)
     th = float(s.get("review.min_confidence_main", 0))
     pred = {res.day: [r for r in res.rows if r.confidence >= th] for res in rr.results}
     actual = load_actual(actual_path, days)
     fields = tuple(args.fields.split(",")) if args.fields else FIELDS
-    res = evaluate(pred, actual, days, fields)
+    res = evaluate(pred, actual, days, fields, ref)
     title = f"השוואה ל-{actual_path.name}, ימים: " + ", ".join(f"{d:%d/%m}" for d in days)
     print(format_summary(res, title))
     if args.report:
@@ -174,7 +182,8 @@ def main(argv: list[str] | None = None) -> int:
 
     e = sub.add_parser("evaluate", help="השוואה לאקסל אמיתי")
     _common(e)
-    e.add_argument("--days", help="2026-08-16,2026-08-17")
+    e.add_argument("--days", help="2026-08-16,2026-08-17  או  auto = הימים שבהם --who פותח כ-Shift 1")
+    e.add_argument("--who", default="auto", help="למצב --days auto (ברירת מחדל: המפקח הראשון ברשימה)")
     e.add_argument("--from", dest="date_from", type=_date)
     e.add_argument("--to", dest="date_to", type=_date)
     e.add_argument("--actual", help="האקסל האמיתי (ברירת מחדל: התבנית)")

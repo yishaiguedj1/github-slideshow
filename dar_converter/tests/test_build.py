@@ -53,10 +53,13 @@ def test_scan_start_only_gets_average_length(ref, settings):
     assert (s.officer, hm(s.start), hm(s.end)) == ("Avi Levi", "12:47", "12:48")
 
 
-def test_contractor_check_takes_two_minutes(ref, settings):
-    res = build(ref, settings, [msg("11:50", NOA, "50 בדיקה לרון c2"),       # visitor (escorted)
-                                msg("11:52", NOA, "52 בדיקה לגיל c2")])      # employee / officer
-    s1, s2 = rows_of(res, SEARCH)
+def test_contractor_check_minutes_follow_settings(ref, settings):
+    msgs = [msg("11:50", NOA, "50 בדיקה לרון c2"),       # visitor (escorted)
+            msg("11:52", NOA, "52 בדיקה לגיל c2")]       # employee / officer
+    s1, s2 = rows_of(build(ref, settings, msgs), SEARCH)
+    assert (hm(s1.start), hm(s1.end)) == ("11:49", "11:50")
+    assert (hm(s2.start), hm(s2.end)) == ("11:51", "11:52")
+    s1, s2 = rows_of(build(ref, settings, msgs, {"times": {"check_minutes_contractor": 2}}), SEARCH)
     assert (hm(s1.start), hm(s1.end)) == ("11:48", "11:50")
     assert (hm(s2.start), hm(s2.end)) == ("11:51", "11:52")
 
@@ -112,9 +115,14 @@ def test_supervisor_is_shift_1_and_others_by_priority(ref, settings):
     assert res.rows[0].action == ASSUMED_POST and res.rows[0].d_e_f[0] == 7 * 3600
 
 
-def test_no_supervisor_in_chat_leaves_shift_1_empty(ref, settings):
-    res = build(ref, settings, [msg("07:46", NOA, "39-42 אבי סרק נועה בדקה c2"),
-                                msg("17:46", NOA, "39-42 אבי סרק נועה בדקה c2")])
+def test_no_supervisor_in_chat_gets_the_default_supervisor(ref, settings):
+    msgs = [msg("07:46", NOA, "39-42 אבי סרק נועה בדקה c2"),
+            msg("17:46", NOA, "39-42 אבי סרק נועה בדקה c2")]
+    res = build(ref, settings, msgs)                  # default_supervisor: auto
+    ap = [(r.shift, r.officer) for r in rows_of(res, ASSUMED_POST)]
+    assert ap == [("Shift 1", "Dana Cohen"), ("Shift 2", "Avi Levi"), ("Shift 3", "Noa Bar")]
+    assert rows_of(res, ASSUMED_POST)[0].flags        # assumed, not seen in the chat
+    res = build(ref, settings, msgs, {"roster": {"default_supervisor": None}})
     ap = [(r.shift, r.officer) for r in rows_of(res, ASSUMED_POST)]
     assert ap == [("Shift 2", "Avi Levi"), ("Shift 3", "Noa Bar")]
     assert any(i.kind == "no_supervisor" for i in res.issues)

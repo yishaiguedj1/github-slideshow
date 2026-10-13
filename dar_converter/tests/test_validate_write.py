@@ -70,7 +70,7 @@ def test_write_keeps_template_and_fills_rows(tmp_path, ref, settings):
     rows = [[c.value for c in r] for r in ws.iter_rows(min_row=10, max_row=20, max_col=11)]
     rows = [r for r in rows if any(r)]
     actions = [r[2] for r in rows]
-    assert actions.count("Assumed Post") == 2 and "Old Name" not in [r[1] for r in rows]
+    assert actions.count("Assumed Post") == 3 and "Old Name" not in [r[1] for r in rows]
     patrol = next(r for r in rows if r[2] == "Patrol: Interior")
     assert patrol[3] == timedelta(hours=7, minutes=38) and patrol[6] == timedelta(hours=7, minutes=42)
     assert ws["D10"].number_format == "[h]:mm:ss"
