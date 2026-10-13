@@ -39,7 +39,7 @@ class Event:
     """A single fact extracted from one line of a message.
 
     kind: scan | scan_start | check | escort_start | escort_end | escort_join |
-          escort_handover | storage | ignore | unknown
+          escort_handover | escort_move | storage | ignore | chatter | unknown
     Times are minutes since midnight of `day` (may exceed 1440 only transiently).
     """
     kind: str

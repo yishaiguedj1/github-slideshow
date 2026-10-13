@@ -19,6 +19,9 @@ officers:
   - name: Gil Amir
     aliases: [גיל]
     shift_priority: 4
+  - name: Omer Paz               # shares the alias עומר with the visitor Omer Gold
+    aliases: [עומר]
+    shift_priority: 5
 
 senders:
   "דנה - עבודה": Dana Cohen
@@ -36,6 +39,8 @@ people:
     escort: false
   - name: Mira Katz
     aliases: [מירה, המנקה]
+  - name: Omer Gold               # escorted visitor; in escort lines "עומר" is him
+    aliases: [עומר]
 
 locations:
   C1: [c1]

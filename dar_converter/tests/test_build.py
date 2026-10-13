@@ -167,3 +167,27 @@ def test_unknown_person_is_marked_for_fix_but_known_one_is_clean(ref, settings):
 def test_one_zone_with_checker_is_marked(ref, settings):
     res = build(ref, settings, [msg("13:51", NOA, "48-51 אבי סרק נועה בדקה c2")])
     assert all(any("C1" in f for f in r.fix) for r in rows_of(res, PATROL) + rows_of(res, SEARCH))
+
+
+def test_several_people_in_one_check_get_consecutive_minutes(ref, settings):
+    res = build(ref, settings, [msg("10:47", AVI, "45 בדיקה לרון, טל c2"),
+                                msg("15:20", AVI, "18-20 בדיקה לרון וטל c1")])
+    got = [(hm(r.start), hm(r.end), r.comment.split(":")[1].split("-")[0].strip())
+           for r in rows_of(res, SEARCH)]
+    assert got == [("10:44", "10:45", "Ron Shani"), ("10:45", "10:46", "Tal Peretz"),
+                   ("15:18", "15:19", "Ron Shani"), ("15:19", "15:20", "Tal Peretz")]
+
+
+def test_open_escort_moves_to_another_place(ref, settings):
+    res = build(ref, settings, [msg("11:24", DANA, "22 תחילת ליווי רון C1"),
+                                msg("11:33", DANA, "32 עוברים לליווי ב C2"),
+                                msg("11:37", DANA, "34-35 בדיקה לרון C2")])
+    esc = [(r.comment, hm(r.start), hm(r.end)) for r in rows_of(res, ESCORT)]
+    assert esc == [("Escort C1 : Ron Shani", "11:22", "11:32"), ("Escort C2 : Ron Shani", "11:32", "11:35")]
+
+
+def test_end_for_everyone_closes_all_open_escorts(ref, settings):
+    res = build(ref, settings, [msg("10:09", DANA, "09 תחילת ליווי רון וטל במחסן"),
+                                msg("10:14", DANA, "13 סיום ליווי מחסן לכולם")])
+    assert [(hm(r.start), hm(r.end)) for r in rows_of(res, ESCORT)] == [("10:09", "10:13")] * 2
+    assert not res.issues or all("כולם" not in i.message for i in res.issues)

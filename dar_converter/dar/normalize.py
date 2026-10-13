@@ -171,9 +171,33 @@ class Reference:
                     return Match(hit[0], hit[1], 1.0, "prefix")
         if fuzzy and len(key) >= 4:
             cands = {cand for alias, cands in self._alias.items()
-                     if len(alias) >= 3 and _one_edit(key, alias) for cand in cands}
+                     if len(alias) >= 3 and one_edit(key, alias) for cand in cands}
             if len(cands) == 1:
                 name, kind = cands.pop()
+                return Match(name, kind, 0.7, "fuzzy")
+        return None
+
+    def officer_fuzzy(self, token: str) -> str | None:
+        """An officer's name with a one-letter typo ("יונתם", "עידן", "יש"). Used only where
+        the grammar expects an officer (the scanner / checker of a round)."""
+        key = norm_token(token)
+        if len(key) < 2:
+            return None
+        found = {name for alias, cands in self._alias.items()
+                 if len(alias) >= 3 and one_edit(key, alias)
+                 for name, kind in cands if kind == "officer"}
+        return found.pop() if len(found) == 1 else None
+
+    def lookup_wildcard(self, token: str, wildcard: str) -> Match | None:
+        """A name with one unreadable letter ("מנ§ה" -> "מנקה"); Hebrew prefixes allowed."""
+        key = norm_token(token)
+        for n in (0, 1):
+            if n and not (len(key) > 3 and key[0] in PREFIXES):
+                continue
+            pat = re.compile("^" + re.escape(key[n:]).replace(re.escape(wildcard), ".") + "$")
+            found = {c for alias, cands in self._alias.items() if pat.match(alias) for c in cands}
+            if len(found) == 1:
+                name, kind = found.pop()
                 return Match(name, kind, 0.7, "fuzzy")
         return None
 
@@ -218,7 +242,7 @@ class Reference:
             for label, aliases in self.locations.items():
                 for a in aliases:
                     a = norm_token(a)
-                    if len(a) >= 4 and re.fullmatch(r"[\u0590-\u05FF]+", a) and _one_edit(v, a):
+                    if len(a) >= 4 and re.fullmatch(r"[\u0590-\u05FF]+", a) and one_edit(v, a):
                         return label
         return None
 
@@ -231,12 +255,15 @@ def norm_token(text: str) -> str:
     return t
 
 
-def _one_edit(a: str, b: str) -> bool:
-    """True when a and b differ by exactly one substitution / insertion / deletion."""
+def one_edit(a: str, b: str) -> bool:
+    """True when a and b differ by exactly one substitution / insertion / deletion
+    or by two neighbouring letters swapped ("גלי" / "גיל")."""
     if a == b or abs(len(a) - len(b)) > 1:
         return False
     if len(a) == len(b):
-        return sum(x != y for x, y in zip(a, b)) == 1
+        diff = [i for i, (x, y) in enumerate(zip(a, b)) if x != y]
+        return len(diff) == 1 or (len(diff) == 2 and diff[1] == diff[0] + 1
+                                  and a[diff[0]] == b[diff[1]] and a[diff[1]] == b[diff[0]])
     if len(a) > len(b):
         a, b = b, a
     i = j = 0

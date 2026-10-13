@@ -8,7 +8,10 @@ Recognised report types (Hebrew, as written in the group):
   escort_end     "06 סיום ליווי", "53 המנקה יצאה מהמשרד"
   escort_join    "43 רון הצטרף לליווי c1"
   escort_handover "חילוף ליווי טל - c1 - 50", "... והמשך ליווי רון"
+  escort_move    "32 עוברים לליווי ב C2"   (the open escort moves to another place)
   storage        "36 גיל סרק מחסן"  (never becomes a DAR row)
+Also: "23 רון חזר ל-c2" (escort again), "47-48 כניסה ויציאה רון C1" (escort + exit check),
+"15-17 בדיקה לטל C1 דנה" (the officer named last did the check).
 Lines that do not fit are returned as kind="unknown" for review.
 """
 from __future__ import annotations
@@ -18,36 +21,81 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from .models import HIGH, LOW, MEDIUM, Event, Message
-from .normalize import Reference, norm_token
+from .normalize import PREFIXES, Reference, norm_token, one_edit
 
 # ---------------------------------------------------------------- vocabulary
-SCAN_VERBS = {"סרק", "סרקה", "סרקו", "סדק", "סרקיה"}
-SELF_SCAN_VERBS = {"סרקתי"}                 # first person: the sender is the actor
+# (typos seen in the group are listed with the right word: "סרש", "סרקהה", "ליוו", "תחיח" ...)
+SCAN_VERBS = {"סרק", "סרקה", "סרקו", "סדק", "סרקיה", "סרש", "סרשה", "סרקהה", "שרק", "שרקה",
+              "סורק", "סורקת"}
+SELF_SCAN_VERBS = {"סרקתי", "ברקתי"}       # first person: the sender is the actor
 SELF_CHECK_VERBS = {"בדקתי"}
-SCAN_NOUNS = {"סריקה", "סריקת", "סריקות"}
-CHECK_VERBS = {"בדק", "בדקה", "בדקו"}
-CHECK_NOUNS = {"בדיקה", "ובדיקה"}
-ESCORT_WORDS = {"ליווי", "ליוי", "לווי", "לליווי", "בליווי", "וליווי", "הליווי", "מליווי"}
-START_WORDS = {"תחילת", "תחיל", "תחיחת", "התחלת", "התחלתי"}
-END_WORDS = {"סיום", "וסיום"}
-HANDOVER_WORDS = {"חילוף", "וחילוף", "המשך", "והמשך", "ממשיך"}
-ENTER_WORDS = {"נכנס", "נכנסה", "נכנסו"}
-EXIT_WORDS = {"יצא", "יצאה", "יוצא", "יוצאת", "יצאו"}
-JOIN_WORDS = {"הצטרף", "הצטרפה", "הצטרפו"}
+SCAN_NOUNS = {"סריקה", "סריקת", "סריקות", "לסרוק"}
+CHECK_VERBS = {"בדק", "בדקה", "בדקו", "בודק", "בודקת"}
+CHECK_NOUNS = {"בדיקה", "ובדיקה", "בדיקת"}
+ESCORT_WORDS = {"ליווי", "ליוי", "לווי", "לליווי", "בליווי", "וליווי", "הליווי", "מליווי",
+                "ליוו", "ליווו", "ליויי"}
+START_WORDS = {"תחילת", "תחיל", "תחיחת", "תחיח", "התחלת", "התחלתי", "התחיל", "התחילה"}
+END_WORDS = {"סיום", "וסיום", "סוף", "וסוף", "סיים", "סיימה", "סיימתי", "מסיים", "הסתיים",
+             "הסתיימה"}
+HANDOVER_WORDS = {"חילוף", "וחילוף", "המשך", "והמשך", "ממשיך", "ממשיכה", "החלפת", "והחלפת",
+                  "החלפה", "והחלפה", "מחליף", "מחליפה"}
+ENTER_WORDS = {"נכנס", "נכנסה", "נכנסו", "נכנסת"}
+EXIT_WORDS = {"יצא", "יצאה", "יוצא", "יוצאת", "יצאו", "יוצאים"}
+JOIN_WORDS = {"הצטרף", "הצטרפה", "הצטרפו", "מצטרף", "מצטרפת", "מצטרפים"}
+RETURN_WORDS = {"חזר", "חזרה", "חזרו", "חוזר", "חוזרת", "חוזרים"}      # "23 רון חזר ל-c2"
+MOVE_WORDS = {"עוברים", "עובר", "עוברת", "עברנו", "עברו"}              # "32 עוברים לליווי ב C2"
+ENTRY_NOUNS = {"כניסה", "וכניסה"}                                       # "כניסה ויציאה רון C1"
+EXIT_NOUNS = {"יציאה", "ויציאה"}
+OFFICER_HINTS = {"מאבטח", "המאבטח", "מאבטחת", "המאבטחת"}                # "בדיקה לגיל מאבטח"
+AFTER_OFFICER_SCAN = {"ברק", "רק"}       # typo of סרק, only right after an officer's name
+BEFORE_ESCORT_END = {"סיון"}             # typo of סיום, only right before "ליווי"
 STOP_WORDS = {"את", "של", "עם", "נוסף", "נוספת", "גם", "ל", "ו", "ב", "ה", "-", "+", "זה", "אני",
-              "כניסה", "ויציאה", "לכיוון", "חזר", "וחוזר", "עובר", "עוברים",
-              "הוצאתי", "מהמערכת", "מהתוכנה", "מהתכנה"}
+              "לכיוון", "הוצאתי", "מהמערכת", "מהתוכנה", "מהתכנה", "תוכנה", "לתוכנה",
+              "הפסקה", "להפסקה", "הפסקת", "צהריים", "לצהריים",
+              "מביא", "להביא", "הביא", "משהו", "אוטו", "האוטו", "רכב", "הרכב", "חלק",
+              "הולך", "הולכת", "שירותים", "לשירותים", "היא", "הוא", "הם", "מחוץ", "בחוץ",
+              "זמני", "זמנית", "בינתיים", "בנתיים", "הכנסת", "ארונות", "אזעקה", "אחרי", "לפני",
+              "שכיבה", "מתי", "כולל", "דק", "דקות", "כמה", "עכשיו", "שוב", "בהמשך"}
+ALL_WORDS = {"כולם", "לכולם", "הכל"}                                   # "סיום ליווי לכולם"
+VOCAB: dict[str, tuple[str, str | None]] = {}
+for _words, _kind, _val in (
+        (SCAN_VERBS, "scan_verb", None), (SELF_SCAN_VERBS, "scan_verb", "SELF"),
+        (SELF_CHECK_VERBS, "check_verb", "SELF"), (SCAN_NOUNS, "scan_noun", None),
+        (CHECK_VERBS, "check_verb", None), (CHECK_NOUNS, "check_noun", None),
+        (ESCORT_WORDS, "escort", None), (START_WORDS, "start", None), (END_WORDS, "end", None),
+        (HANDOVER_WORDS, "handover", None), (ENTER_WORDS, "enter", None),
+        (EXIT_WORDS, "exit", None), (JOIN_WORDS, "join", None), (RETURN_WORDS, "return", None),
+        (MOVE_WORDS, "move", None), (ENTRY_NOUNS, "entry_noun", None),
+        (EXIT_NOUNS, "exit_noun", None), (OFFICER_HINTS, "officer_hint", None),
+        (ALL_WORDS, "all", None)):
+    for _w in _words:
+        VOCAB[_w] = (_kind, _val)
+# long words that may carry a one-letter typo ("נכננסה", "לחווי"); short or common-looking
+# words (סיום, מסיים ...) are left out on purpose - "מסכים" must not become "מסיים"
+FUZZY_VOCAB = {w: VOCAB[w] for w in (
+    "ליווי", "לליווי", "בליווי", "וליווי", "הליווי", "מליווי", "נכנסה", "נכנסו", "נכנסת",
+    "יוצאת", "הצטרף", "הצטרפה", "הצטרפו", "התחלתי", "התחלת", "תחילת", "סריקה", "סריקות",
+    "בדיקה", "ובדיקה", "סרקתי", "בדקתי")}
+NO_PREFIX_KINDS = {"handover"}            # "בהמשך היום" is not "המשך ליווי"
 REPORT_KINDS = {"scan_verb", "scan_noun", "check_verb", "check_noun", "escort", "start", "end",
-                "handover", "enter", "exit", "join"}
+                "handover", "enter", "exit", "join", "entry_noun", "exit_noun"}
+NAME_KINDS = ("officer", "person", "unknown_name")
 IGNORE_PATTERNS = [re.compile(p) for p in (
     r"^הוצאתי מה(תוכנה|מערכת)", r"^יוצאים? ל(צהריים|הפסקה)", r"^נחזור", r"^עוברים ל",
     r"^This message was deleted$", r"^<Media omitted>$", r"null$",
 )]
+_SIGNATURE = re.compile(r"(?:(?<![A-Za-z])[cvс]\s?[12]|-)\s*-?\s*([\u0590-\u05FF§]+)"
+                        r"\s*(?:-?\s*(?<![A-Za-z])[cvс]\s?[12])?\s*$", re.I)
+_INLINE_HOUR = re.compile(r"\s*\*?\s*של\s+שעה\s+(\d{1,2})(?::00)?\s*\*?\s*$")
+_MOVE_WORD = re.compile(r"(?<![\u0590-\u05FF])[לוהבמש]?(?:" +
+                        "|".join(sorted(MOVE_WORDS | RETURN_WORDS, key=len, reverse=True)) +
+                        r")(?![\u0590-\u05FF])")
 
 _ZONE = re.compile(r"(?i)(?<![a-z])([cvс])\s?([12])(?!\d)")
 _TIME = r"(\d{1,2})(?::(\d{2}))?"
 _EXPR = re.compile(rf"(?<![\d:]){_TIME}(?:\s*-\s*{_TIME})?(?![\d:])")
 _HEBREW_THEN_ZONE = re.compile(r"([֐-׿])([cCvVсС]\s?[12])")
+_ZONE_THEN_HEBREW = re.compile(r"(?<![A-Za-z])([cCvVсС][12])(?=[֐-׿])")
 
 
 @dataclass
@@ -74,7 +122,9 @@ def hour_header(line: str) -> int | None:
     s = re.sub(r"[^֐-׿a-zA-Z0-9: ]", " ", line)
     s = re.sub(r":", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
-    m = re.fullmatch(r"(?:זה )?(?:סריקות |סריקה )?(?:של )*(?:שעה )?(\d{1,2})(?: 00)?", s)
+    # "שעה 16:00-17:00", "של שעה 10:00-11:" -> the first hour
+    m = re.fullmatch(r"(?:זה )?(?:סריקות |סריקה )?(?:של )*(?:שעה )?(\d{1,2})(?: 00)?"
+                     r"(?: \d{1,2}(?: 00)?)?", s)
     if m and 0 <= int(m.group(1)) <= 23:
         return int(m.group(1))
     return None
@@ -82,9 +132,17 @@ def hour_header(line: str) -> int | None:
 
 def preclean(line: str) -> str:
     s = line.replace("–", "-").replace("—", "-").replace("־", "-")
+    s = re.sub(r"(?<=[\u0590-\u05FF])\*(?=[\u0590-\u05FF])", "", s)      # "בד*ק"
     s = s.replace("*", " ").replace("_", " ")
     s = _HEBREW_THEN_ZONE.sub(r"\1 \2", s)
+    s = _ZONE_THEN_HEBREW.sub(r"\1 ", s)                                  # "C2דנה"
     s = re.sub(r"(תחילת|סיום)(?=[\u0590-\u05FF])", r"\1 ", s)   # "תחילתמליווי" typo
+    s = re.sub(r"(בדיקה|סריקה)(?=[\u0590-\u05FF]{2})", r"\1 ", s)   # "בדיקהמיוחאי"
+    s = re.sub(r"(?<=[\u0590-\u05FF])\d(?=[\u0590-\u05FF])", "§", s)    # "מנ1ה": typo letter
+    if re.match(r"\s*\d", s):                                            # "סרקה דנה בדק0"
+        s = re.sub(r"(?<=[\u0590-\u05FF])\d[\u0590-\u05FF]?\s*$", "", s)
+    s = re.sub(r"(\d{1,2}):\s+(\d{2})(?!\d)", r"\1:\2", s)              # "13: 28"
+    s = re.sub(r"(?<![\d:])(\d{1,2}):(\d{2})-(\d{1,2})-(\d{2})(?![\d:])", r"\1:\2-\3:\4", s)
     s = re.sub(r"(?<![\d:])([01]\d|2[0-3])([0-5]\d)(?![\d:])", r"\1:\2", s)  # "1151" -> 11:51
     return re.sub(r"\s+", " ", s).strip()
 
@@ -133,6 +191,7 @@ class Extractor:
         self.tol = future_tolerance
         self.scan_minutes = scan_minutes      # average scan when only one time is given
         self.loc_patterns = location_patterns(ref)
+        self._signature: str | None = None
 
     # ------------------------------------------------------------ public API
     def extract(self, msg: Message) -> list[Event]:
@@ -153,28 +212,81 @@ class Extractor:
             if is_ignorable(line):
                 events.append(Event("ignore", msg, line, day=msg.ts.date()))
                 continue
-            evs = self.extract_line(msg, line, hour_ctx, sender_officer)
+            line_hour = hour_ctx
+            m = _INLINE_HOUR.search(line)              # "45-49 ... C2 של שעה 14:00*"
+            if m and m.start() > 0 and 0 <= int(m.group(1)) <= 23:
+                line_hour = int(m.group(1))
+                line = line[:m.start()]
+            evs = self.extract_line(msg, line, line_hour, sender_officer)
             for e in evs:
                 if getattr(e, "_explicit_hour", False) and e.end is not None:
                     self._anchor = e.end
-            # a bare name on its own line continues the previous escort line ("וטל")
-            if len(evs) == 1 and evs[0].kind == "unknown" and events:
-                names = self._names_only(line)
-                prev = events[-1]
-                if names and prev.kind.startswith("escort"):
-                    prev.subjects.extend(n for n in names if n not in prev.subjects)
+            if len(evs) == 1 and evs[0].kind in ("unknown", "chatter") and events:
+                if self._continue_list(msg, line, events, line_hour):
                     continue
             events.extend(evs)
         return events
+
+    def _continue_list(self, msg: Message, line: str, events: list[Event],
+                       hour_ctx: int | None) -> bool:
+        """Names on their own line continue the line above:
+        an escort ("09 תחילת ליווי רון" / "וטל") or a list of checks
+        ("בדקתי את c1" / "רון 1153" / "טל")."""
+        _, exprs, words = split_tokens(preclean(line), self.loc_patterns)
+        toks = [self._classify(w) for w in words]
+        toks = [t for t in toks if t[1] != "stop"]
+        if not toks or not all(t[1] in ("person", "officer") for t in toks) or len(exprs) > 1:
+            return False
+        names = [t[2] for t in toks]
+        prev = events[-1]
+        if prev.kind.startswith("escort") and not exprs:
+            prev.subjects.extend(n for n in names if n not in prev.subjects)
+            return True
+        if prev.kind != "check" or prev.zone is None:
+            return False
+        if not prev.subjects:                      # "בדקתי את c1" + "רון 1153"
+            e = Event("check", msg, prev.line, day=prev.day, zone=prev.zone, actor=prev.actor,
+                      subjects=names)
+            if exprs:
+                self._set_times(e, exprs, msg, hour_ctx)
+            else:
+                e.start, e.end, e.single_time = prev.start, prev.end, prev.single_time
+                for n in prev.notes:
+                    if n != "לא צוין את מי בדקו":
+                        e.note(n, MEDIUM)
+            events[-1] = e
+            return True
+        e = Event("check", msg, line, day=prev.day, zone=prev.zone, actor=prev.actor,
+                  subjects=names)
+        if exprs:
+            self._set_times(e, exprs, msg, hour_ctx)
+        elif prev.end is not None:
+            e.start, e.end, e.single_time = prev.end, prev.end + 1, True
+            e.note("שעה משוערת - שורה ברשימת בדיקות בלי שעה", MEDIUM)
+        events.append(e)
+        return True
 
     # ------------------------------------------------------------ line grammar
     def extract_line(self, msg: Message, line: str, hour_ctx: int | None,
                      sender_officer: str | None) -> list[Event]:
         clean = preclean(line)
         zones, exprs, words = split_tokens(clean, self.loc_patterns)
+        if len(exprs) > 1 and len(exprs[-1].text.strip()) == 1 and clean.endswith(exprs[-1].text.strip()):
+            exprs = exprs[:-1]                     # "... גיל בדק  1": a stray digit at the end
         toks = self._classify_words(words)
+        sig = _SIGNATURE.search(clean)
+        self._signature = norm_token(sig.group(1)) if sig else None   # "... C1 דנה"
         kinds = {t[1] for t in toks}
-        names = [t for t in toks if t[1] in ("officer", "person", "unknown_name")]
+        dest = None
+        if kinds & {"move", "return"}:
+            # "22 בדיקה לרון c2 עובר לc1": the zone after the verb is where he goes next
+            mv = _MOVE_WORD.search(clean)
+            if mv:
+                before = ["C" + z.group(2) for z in _ZONE.finditer(clean[:mv.start()])]
+                after = ["C" + z.group(2) for z in _ZONE.finditer(clean[mv.end():])]
+                if after:
+                    dest = after[0]
+                    zones = before or after
 
         def ev(kind: str, **kw) -> Event:
             kw.setdefault("day", msg.ts.date())
@@ -187,11 +299,14 @@ class Extractor:
         location = loc_words[0] if loc_words else None
         zone = self._pick_zone(zones, location)
 
-        has_escort = "escort" in kinds or "enter" in kinds or "exit" in kinds or "join" in kinds
+        has_escort = bool(kinds & {"escort", "enter", "exit", "join"}) or \
+            bool(exprs and kinds & {"entry_noun", "exit_noun"})     # "יציאה של רון" in a question
         has_scan_verb = "scan_verb" in kinds
         has_scan_noun = "scan_noun" in kinds
         has_check_noun = "check_noun" in kinds
         has_check_verb = "check_verb" in kinds
+        moving = bool(kinds & {"move", "return"}) and not (
+            has_scan_verb or has_scan_noun or has_check_noun or has_check_verb)
 
         # storage scans / checks never become rows
         if location == "Storage" and not has_escort and (has_scan_verb or has_scan_noun
@@ -207,9 +322,11 @@ class Extractor:
             e.note("יותר מביטוי זמן אחד בשורה", LOW)
             return [e]
 
-        if has_escort:
+        if has_escort or moving:
+            if moving and not exprs and not has_escort:
+                return [ev("ignore")]                  # "עוברים לC1" - the next line has the time
             return self._escort(msg, line, toks, exprs, zone, location, hour_ctx,
-                                sender_officer, has_check_noun, ev)
+                                sender_officer, has_check_noun, ev, dest)
 
         if has_scan_verb or has_scan_noun:
             return self._scan(toks, exprs, zone, msg, hour_ctx, sender_officer, ev)
@@ -239,8 +356,8 @@ class Extractor:
         e = ev("scan", zone=zone)
         scanner = self._name_before(toks, ("scan_verb",))
         checker = self._name_before(toks, ("check_verb",))
-        scanner = sender_officer if scanner == "SELF" else scanner
-        checker = sender_officer if checker == "SELF" else checker
+        scanner = sender_officer if scanner == "SELF" else self._officer_slot(scanner, e)
+        checker = sender_officer if checker == "SELF" else self._officer_slot(checker, e)
         if scanner is None:
             # "30-35 סריקה C1 דנה" / "09-12 סריקה c2" / "00-04 סריקה C2 דנה ונועה"
             officers = [t[2] for t in toks if t[1] == "officer"]
@@ -269,20 +386,42 @@ class Extractor:
     def _check(self, toks, exprs, zone, msg, hour_ctx, sender_officer, ev) -> list[Event]:
         e = ev("check", zone=zone)
         kinds = [t[1] for t in toks]
-        if "check_verb" in kinds:                             # "16 גיל בדק דנה C1"
+        noun_first = "check_noun" in kinds and (
+            "check_verb" not in kinds or kinds.index("check_noun") < kinds.index("check_verb"))
+        if noun_first:                                        # "44 בדיקה לרון c2"
+            i = kinds.index("check_noun")
+            tail = []
+            for t in toks[i + 1:]:
+                if t[1] in ("move", "return", "join", "exit", "enter"):
+                    break                                     # "... עובר ומצטרף לגיל ב C2"
+                tail.append(t)
+            after = [t for t in tail if t[1] in NAME_KINDS]
+            before = [t for t in toks[:i] if t[1] in NAME_KINDS]
+            e.actor = sender_officer
+            tail_kinds = [t[1] for t in tail]
+            if "check_verb" in tail_kinds:
+                # "33-36 בדיקה לטל C1 גיל בדק": the name before the verb did the check
+                j = tail_kinds.index("check_verb")
+                names = [t for t in tail[:j] if t[1] in NAME_KINDS]
+                who = self._officer_of(names[-1]) if names and tail[j][2] != "SELF" else None
+                if who:
+                    e.actor, after = who, names[:-1]
+            elif len(after) >= 2 and norm_token(after[-1][0]) == self._signature:
+                # "15-17 בדיקה לטל C1 דנה": an officer's name after the zone signs the check
+                who = self._officer_of(after[-1], bare=True)
+                if who:
+                    e.actor, after = who, after[:-1]
+                    if who != sender_officer:
+                        e.note(f"הבודק ({who}) נלקח מהשם בסוף השורה", MEDIUM)
+            subjects = [t[2] for t in (after or before)]
+        else:                                                 # "16 גיל בדק דנה C1"
             i = kinds.index("check_verb")
             before = [t for t in toks[:i] if t[1] in ("officer", "unknown_name")]
-            after = [t for t in toks[i + 1:] if t[1] in ("officer", "person", "unknown_name")]
+            after = [t for t in toks[i + 1:] if t[1] in NAME_KINDS]
             if toks[i][2] == "SELF":                          # "בדקתי את רון"
                 before = []
-            e.actor = before[-1][2] if before else sender_officer
+            e.actor = self._officer_slot(before[-1][2], e) if before else sender_officer
             subjects = [t[2] for t in after]
-        else:                                                 # "44 בדיקה לרון c2"
-            i = kinds.index("check_noun")
-            after = [t for t in toks[i + 1:] if t[1] in ("officer", "person", "unknown_name")]
-            before = [t for t in toks[:i] if t[1] in ("officer", "person", "unknown_name")]
-            e.actor = sender_officer
-            subjects = [t[2] for t in (after or before)]
         e.subjects = list(dict.fromkeys(subjects))
         if not e.subjects:
             e.note("לא צוין את מי בדקו", LOW)
@@ -295,24 +434,55 @@ class Extractor:
         if e.actor is None:
             e.note("לא ידוע מי בדק", LOW)
         self._set_times(e, exprs, msg, hour_ctx)
-        if not exprs:
-            e.note("בדיקה בלי שעה", LOW)
+        if not exprs:                                         # "בדיקה לרון c1" (sent 11:11)
+            e.end = self._msg_minutes(e, msg)
+            e.start, e.single_time = e.end - 1, True
+            e.note("בדיקה בלי שעה - נלקחה שעת שליחת ההודעה", MEDIUM)
         return [e]
 
     def _escort(self, msg, line, toks, exprs, zone, location, hour_ctx, sender_officer,
-                has_check_noun, ev) -> list[Event]:
+                has_check_noun, ev, dest=None) -> list[Event]:
+        orig = toks
+        toks = self._escorted_namesakes(toks)
         kinds = [t[1] for t in toks]
         people = [t[2] for t in toks if t[1] in ("person", "unknown_name")]
+        if not people and "all" in kinds:
+            people = ["*"]                                   # "סיום ליווי לכולם"
         officers = [t[2] for t in toks if t[1] == "officer"]
         out: list[Event] = []
-        where = zone or location
+        where = dest or zone or location
+
+        if "entry_noun" in kinds and "exit_noun" in kinds and exprs and exprs[0].is_range \
+                and not has_check_noun:
+            # "47-48 כניסה ויציאה רון C1": escorted in and out -> escort + exit check
+            st = ev("escort_start", zone=where, actor=sender_officer, subjects=people)
+            self._set_times(st, exprs, msg, hour_ctx, single_is_point=True)
+            chk = ev("check", zone=zone, actor=sender_officer, subjects=list(people), day=st.day)
+            chk.start = None if st.end is None else st.end - 1
+            chk.end, chk.single_time = st.end, True
+            if not people:
+                st.note("לא צוין מי מלווה", LOW)
+            return [st, chk]
+        moving_all = people == ["*"] and not set(kinds) & {"end", "exit", "exit_noun"}
+        if ("move" in kinds or moving_all) and not set(kinds) & {"end", "handover", "join"} \
+                and not has_check_noun:
+            # "32 עוברים לליווי ב C2": the open escort continues in another place
+            e = ev("escort_move", zone=where, actor=sender_officer, subjects=people)
+            self._set_times(e, exprs, msg, hour_ctx, single_is_point=True)
+            if where is None:
+                e.note("לא צוין לאן עבר הליווי", LOW)
+            return [e]
 
         # check + end / handover in one line:
         #   "48-50 בדיקה לרון C2 וסיום ליווי", "10:46-47 בדיקה לנועה והמשך ליווי רון"
         if has_check_noun:
+            # the checked name keeps its first reading ("בדיקה לעומר והחלפת ליווי" may be the
+            # officer); the builder decides between namesakes from the day's context
             i = kinds.index("check_noun")
-            after = [t for t in toks[i + 1:] if t[1] in ("officer", "person", "unknown_name")]
-            subj = after[0][2] if after else (people[0] if people else None)
+            after = [j for j in range(i + 1, len(orig)) if orig[j][1] in NAME_KINDS]
+            subj = orig[after[0]][2] if after else (people[0] if people else None)
+            people = [t[2] for j, t in enumerate(toks)
+                      if t[1] in ("person", "unknown_name") and not (after and j == after[0])]
             chk = ev("check", zone=zone, actor=sender_officer, subjects=[subj] if subj else [])
             self._set_times(chk, exprs, msg, hour_ctx)
             if subj is None:
@@ -320,14 +490,14 @@ class Extractor:
             out.append(chk)
             point = chk.end
             if "handover" in kinds:
-                escorted = [p for p in people if p != subj]
+                escorted = list(people)
                 h = ev("escort_handover", zone=where, actor=sender_officer, subjects=escorted,
                        start=chk.start if chk.start is not None else point, day=chk.day)
                 h.end = h.start
                 if not escorted:
                     h.note("החלפת ליווי בלי שם המלווה - לפי הליווי הפתוח", MEDIUM)
                 out.append(h)
-            elif "end" in kinds:
+            elif "end" in kinds or "exit_noun" in kinds:
                 end = ev("escort_end", zone=where, actor=sender_officer,
                          subjects=[subj] if subj and subj not in officers else people,
                          start=point, end=point, day=chk.day)
@@ -340,9 +510,9 @@ class Extractor:
             e = ev("escort_handover", zone=where, actor=sender_officer, subjects=people)
             if len(officers) > 1:
                 e.note("החלפת ליווי בין מאבטחים - לבדוק מי ממשיך", MEDIUM)
-        elif "end" in kinds or "exit" in kinds:               # "06 סיום ליווי", "המנקה יצאה"
+        elif set(kinds) & {"end", "exit", "exit_noun"}:          # "06 סיום ליווי", "המנקה יצאה"
             e = ev("escort_end", zone=where, actor=sender_officer, subjects=people)
-        else:                                                 # start / entered / "ליווי רון"
+        else:                                                 # start / entered / "רון חזר ל-c2"
             e = ev("escort_start", zone=where, actor=sender_officer, subjects=people)
             if officers and "start" in kinds and len(officers) == 1 and not people:
                 e.note("ליווי של מאבטח? לבדוק", LOW)
@@ -377,56 +547,96 @@ class Extractor:
                 continue
             out.append(self._classify(words[i]))
             i += 1
+        # typos that depend on the neighbours: "אבי ברק מחסן" (סרק), "סיון ליווי" (סיום);
+        # "בדיקה לגיל מאבטח" - the officer, not a namesake
+        for i, (w, kind, val) in enumerate(out):
+            k = norm_token(w)
+            if kind in ("other", "unknown_name") and k in AFTER_OFFICER_SCAN and i \
+                    and out[i - 1][1] == "officer":
+                out[i] = (w, "scan_verb", None)
+            elif kind in ("other", "unknown_name", "person") and k in BEFORE_ESCORT_END \
+                    and i + 1 < len(out) and out[i + 1][1] == "escort":
+                out[i] = (w, "end", None)
+            elif kind == "officer_hint" and i and out[i - 1][1] in ("person", "officer"):
+                m = self.ref.lookup(out[i - 1][0], prefer="officer", fuzzy=False)
+                if m and m.kind == "officer":
+                    out[i - 1] = (out[i - 1][0], "officer", m.name)
         return out
 
     def _classify(self, w: str) -> tuple[str, str, str | None]:
         k = norm_token(w)
-        if k in SCAN_VERBS:
-            return (w, "scan_verb", None)
-        if k in SELF_SCAN_VERBS:
-            return (w, "scan_verb", "SELF")
-        if k in SELF_CHECK_VERBS:
-            return (w, "check_verb", "SELF")
-        if k in SCAN_NOUNS:
-            return (w, "scan_noun", None)
-        if k in CHECK_VERBS:
-            return (w, "check_verb", None)
-        if k in CHECK_NOUNS:
-            return (w, "check_noun", None)
-        if k in ESCORT_WORDS:
-            return (w, "escort", None)
-        if k in START_WORDS:
-            return (w, "start", None)
-        if k in END_WORDS:
-            return (w, "end", None)
-        if k in HANDOVER_WORDS:
-            return (w, "handover", None)
-        if k in ENTER_WORDS:
-            return (w, "enter", None)
-        if k in EXIT_WORDS:
-            return (w, "exit", None)
-        if k in JOIN_WORDS:
-            return (w, "join", None)
+        if k in VOCAB:
+            return (w, *VOCAB[k])
         if k in STOP_WORDS:
             return (w, "stop", None)
         loc = self.ref.location(k)
         if loc:
             return (w, "location", loc)
+        m = self.ref.lookup(k, fuzzy=False)
+        if m:
+            return (w, m.kind, m.name)
+        if len(k) > 2 and k[0] in PREFIXES:                 # "לסריקה", "בסיום", "מבחוץ"
+            if k[1:] in VOCAB and VOCAB[k[1:]][0] not in NO_PREFIX_KINDS:
+                return (w, *VOCAB[k[1:]])
+            if k[1:] in STOP_WORDS:
+                return (w, "stop", None)
+        if len(k) >= 5:                                      # "נכננסה", "לחווי"
+            hits = {v for word, v in FUZZY_VOCAB.items() if one_edit(k, word)}
+            if len(hits) == 1:
+                return (w, *hits.pop())
+        if "§" in k:                                         # "מנ1ה": one unreadable letter
+            m = self.ref.lookup_wildcard(k, "§")
+            if m:
+                return (w, m.kind, m.name)
         m = self.ref.lookup(k)
         if m:
             return (w, m.kind, m.name)
-        if re.fullmatch(r"[֐-׿]{2,}", k):
+        if re.fullmatch(r"[֐-׿§]{2,}", k):
             return (w, "unknown_name", "?" + _strip_prefix(k))
         return (w, "other", None)
 
-    def _names_only(self, line: str) -> list[str]:
-        _, exprs, words = split_tokens(preclean(line), self.loc_patterns)
-        if exprs:
-            return []
-        toks = [self._classify(w) for w in words]
-        if toks and all(t[1] in ("person", "officer") for t in toks):
-            return [t[2] for t in toks]
-        return []
+    def _officer_slot(self, name: str | None, e: Event) -> str | None:
+        """An unknown name where only an officer fits (scanner / checker): accept a one-letter
+        typo of an officer's name ("יונתם", "עידן", "יש")."""
+        if name and name.startswith("?"):
+            o = self.ref.officer_fuzzy(name[1:])
+            if o:
+                e.info.append(f"'{name[1:]}' זוהה כ-{o} (שגיאת כתיב)")
+                return o
+        return name
+
+    def _officer_of(self, tok, bare: bool = False) -> str | None:
+        """The officer a name token stands for. bare=True: only a name written without a
+        Hebrew prefix ("דנה", not "לדנה" - that one is a checked person)."""
+        word, kind, val = tok
+        if kind == "unknown_name":
+            return self.ref.officer_fuzzy(val[1:])
+        m = self.ref.lookup(word, prefer="officer", fuzzy=False)
+        if m and m.kind == "officer" and (not bare or m.via == "exact"):
+            return m.name
+        return None
+
+    def _escorted_namesakes(self, toks):
+        """In an escort line a name shared by an officer and an escorted visitor ("עומר") is
+        the visitor - officers are not escorted - unless the officer is the one who acts
+        ("עומר סיים ליווי", "עומר ממשיך") or is called a guard ("עומר המאבטח")."""
+        kinds = [t[1] for t in toks]
+        # "חילוף אבי ועומר בליווי רון": in a hand-over the names before "ליווי" are officers
+        first_escort = kinds.index("escort") if "handover" in kinds and "escort" in kinds else -1
+        out = []
+        for i, t in enumerate(toks):
+            if t[1] == "officer" and i > first_escort:
+                nxt = kinds[i + 1] if i + 1 < len(toks) else None
+                visitors = [n for n, k in self.ref.namesakes(t[2])
+                            if k == "person" and self.ref.needs_escort(n)]
+                signature = i == len(toks) - 1 and i > 0 and \
+                    norm_token(t[0]) == self._signature            # "... c1 - עומר"
+                if visitors and not signature and nxt not in (
+                        "end", "handover", "officer_hint", "scan_verb", "check_verb"):
+                    out.append((t[0], "person", visitors[0]))
+                    continue
+            out.append(t)
+        return out
 
     @staticmethod
     def _name_before(toks, verb_kinds) -> str | None:
@@ -513,7 +723,16 @@ class Extractor:
             e.day = msg.ts.date() - timedelta(days=1)
             start += 1440
             end += 1440
-        if x.is_range and (end - start > 90 or (x.m2 < x.m1 and x.h1 is None and end - start > 20)):
+        if x.is_range and x.h1 is None and x.h2 is None and x.m2 < x.m1 and end - start > 20 \
+                and e.kind in ("scan", "check", "storage"):
+            fixed = self._fix_reversed(x, e.kind)          # "49-46" / "42-25"
+            if fixed is not None:
+                self._set_times(e, [fixed], msg, hour_ctx, single_is_point)
+                e.note(f"טווח הפוך בצ'אט ({x.text.strip()}) - נרשם {fixed.m1:02d}-{fixed.m2:02d}",
+                       MEDIUM)
+                return
+        if x.is_range and (end - start > 90 or (x.m2 < x.m1 and x.h1 is None and end - start > 20
+                                                and not e.kind.startswith("escort"))):
             e.note(f"טווח זמן חריג ({x.text})", LOW)
             end = None
             if x.h1 is None and hour_ctx is None:       # keep the start in the message's hour
@@ -527,16 +746,30 @@ class Extractor:
         if not x.is_range and not single_is_point and e.kind == "check":
             start = end - 1                    # builder lengthens it for contractors
         elif not x.is_range and not single_is_point and e.kind == "scan":
-            # one time on a scan line = its start; an average scan takes a few minutes
+            # one time on a scan line = its start ("20 סריקה בc2" -> 20-23, as in the DAR)
             start, end = end, end + self.scan_minutes
-            if end > t_msg + self.tol:
-                start, end = start - self.scan_minutes, start
             e.note(f"נמסרה שעה אחת לסריקה - משך ממוצע {self.scan_minutes} דק'", MEDIUM)
         e.start, e.end = start, end
 
+    def _fix_reversed(self, x: TimeExpr, kind: str) -> TimeExpr | None:
+        """A reversed minute range: swapped ("49-46" -> 46-49) or a typo in the tens of the
+        end ("42-25" -> 42-45). The reading whose length is closest to a usual scan (or
+        check) wins - this matched the manual entries in 8 of 9 cases."""
+        target = 1 if kind == "check" else self.scan_minutes
+        cands = []
+        swap = x.m1 - x.m2
+        if 1 <= swap <= 15:
+            cands.append((abs(swap - target), TimeExpr(None, x.m2, None, x.m1, x.text)))
+        typo = ((x.m2 % 10) - (x.m1 % 10)) % 10
+        if typo >= 1 and x.m1 + typo <= 59:
+            cands.append((abs(typo - target), TimeExpr(None, x.m1, None, x.m1 + typo, x.text)))
+        return min(cands, key=lambda c: c[0])[1] if cands else None
+
 
 def _strip_prefix(k: str) -> str:
-    return k[1:] if len(k) > 3 and k[0] in "לוהבמש" else k
+    """An unknown name keeps its first letter unless it is ל / ו ("לניר", "וניר"):
+    names such as מתיאס or מיכה start with other prefix letters."""
+    return k[1:] if len(k) > 3 and k[0] in "לו" else k
 
 
 def extract_all(msgs: list[Message], ref: Reference, future_tolerance: int = 2,

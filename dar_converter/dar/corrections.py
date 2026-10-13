@@ -32,7 +32,8 @@ import yaml
 from .models import HIGH, Event, Message
 from .normalize import Reference
 
-EVENT_KINDS = {"scan", "check", "escort_start", "escort_end", "escort_join", "escort_handover"}
+EVENT_KINDS = {"scan", "check", "escort_start", "escort_end", "escort_join", "escort_handover",
+               "escort_move"}
 _HHMM = re.compile(r"^\d{1,2}:\d{2}$")
 
 

@@ -155,7 +155,7 @@ class Builder:
             message. The employee is checked only a few times a day, entering C1 / C2.
         """
         handover_msgs = {e.msg.id for e in evs if e.kind in ("escort_handover", "escort_end")}
-        escort_kinds = ("escort_start", "escort_end", "escort_join", "escort_handover")
+        escort_kinds = ("escort_start", "escort_end", "escort_join", "escort_handover", "escort_move")
 
         def person_namesake(subj: str) -> str | None:
             if not self.ref.is_officer(subj):
@@ -360,7 +360,7 @@ class Builder:
         rows = []
         for c in sorted([e for e in evs if e.kind == "check" and not e.used], key=_tkey):
             subjects = c.subjects or [None]
-            for subj in subjects:
+            for i, subj in enumerate(subjects):
                 zone = c.zone
                 row_notes = []
                 if zone is None and subj:
@@ -371,9 +371,16 @@ class Builder:
                 if subj and subj.startswith("?"):
                     row_notes.append(f"!שם לא מוכר: {subj[1:]}")
                 start = c.start if c.start is not None else (c.end - 1 if c.end is not None else None)
-                if c.single_time and c.end is not None and self.ref.needs_escort(name):
-                    start = c.end - int(self.s.get("times.check_minutes_contractor", 2))
-                r = self._row(c.day, SEARCH, c.actor, start, c.end, self._ms_comment(zone, name),
+                end = c.end
+                if len(subjects) > 1 and start is not None and end is not None:
+                    # "45 בדיקה לרון, טל c2" -> 44-45, 45-46: one person after the other
+                    span = end - start
+                    step = max(1, span // len(subjects))
+                    start = start + i * step
+                    end = end if (i == len(subjects) - 1 and span >= len(subjects)) else start + step
+                elif c.single_time and end is not None and self.ref.needs_escort(name):
+                    start = end - int(self.s.get("times.check_minutes_contractor", 1))
+                r = self._row(c.day, SEARCH, c.actor, start, end, self._ms_comment(zone, name),
                               [c.msg])
                 self._carry(r, c)
                 for n in row_notes:
@@ -400,7 +407,7 @@ class Builder:
         if scans:
             z = max(scans, key=lambda e: e.end).zone
             return z, f"האזור ({z}) נלקח מהסריקה האחרונה של הנבדק"
-        esc = [e for e in evs if e.kind in ("escort_start", "escort_join", "escort_handover")
+        esc = [e for e in evs if e.kind in ("escort_start", "escort_join", "escort_handover", "escort_move")
                and subject in e.subjects and e.zone in ZONES and e.start is not None and e.start <= t]
         if esc:
             z = max(esc, key=lambda e: e.start).zone
@@ -410,7 +417,7 @@ class Builder:
     # ---------------------------------------------------------------- rows: escorts
     def _escort_segments(self, evs: list[Event], res: DayResult) -> list[dict]:
         """Escort intervals per escorted person: [{person, officer, loc, start, end, ...}]."""
-        kinds = ("escort_start", "escort_join", "escort_handover", "escort_end")
+        kinds = ("escort_start", "escort_join", "escort_handover", "escort_move", "escort_end")
         stream = [e for e in evs if (e.kind in kinds and not e.used) or e.kind == "check"]
         stream.sort(key=lambda e: ((e.start if e.kind != "check" else e.end) or 0,
                                    e.msg.ts, e.msg.line_no))
@@ -446,6 +453,15 @@ class Builder:
                         closed_by_msg.add((p, ev.msg.id))
                 continue
             t = ev.start
+            if "*" in ev.subjects:                   # "כולם": every open escort (of this place)
+                ev.subjects = [p for p, o in open_.items()
+                               if ev.kind != "escort_end" or ev.zone in (None, o["loc"])]
+                if ev.kind in ("escort_start", "escort_join"):
+                    ev.kind = "escort_move"
+                if not ev.subjects:
+                    res.issues.append(Issue(ev.day, "all_without_escort",
+                                            "'כולם' בלי ליווי פתוח", sources=[ev.msg]))
+                    continue
             if ev.kind in ("escort_start", "escort_join"):
                 for p in ev.subjects:
                     if p in open_:
@@ -466,6 +482,22 @@ class Builder:
                     start(p, ev, t, ev.zone or loc, handover=True)
                     if not ev.subjects:
                         open_[p]["notes"].append("המלווה בהחלפה נקבע לפי הליווי הפתוח")
+            elif ev.kind == "escort_move":
+                # "32 עוברים לליווי ב C2": the open escort(s) continue in another place
+                targets = [p for p in ev.subjects if p in open_] or \
+                          [p for p, o in open_.items() if o["officer"] == ev.actor] or \
+                          (list(open_) if len(open_) == 1 else [])
+                if not targets:
+                    res.issues.append(Issue(ev.day, "move_without_escort",
+                                            "מעבר מקום בלי ליווי פתוח", sources=[ev.msg]))
+                for p in targets:
+                    if t is None or open_[p]["loc"] == ev.zone or ev.zone is None:
+                        continue
+                    officer = open_[p]["officer"]
+                    open_[p]["events"].append(ev)
+                    close(p, t)
+                    start(p, ev, t, ev.zone)
+                    open_[p]["officer"] = ev.actor or officer
             elif ev.kind == "escort_end":
                 targets = [p for p in ev.subjects if p in open_]
                 if not ev.subjects:
