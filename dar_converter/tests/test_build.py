@@ -264,3 +264,12 @@ def test_check_on_the_way_does_not_end_the_storage_escort(ref, settings):
     assert esc == [("Escort C2 : Ron Shani", "12:38", "12:41"), ("Escort Storage : Ron Shani", "12:41", "13:05")]
     (chk,) = rows_of(res, SEARCH)
     assert chk.comment == "Metal screening C2 : Ron Shani - Declined to sit"
+
+
+def test_logistics_team_is_escorted_only_in_c1_c2(ref, settings):
+    res = build(ref, settings, [msg("09:10", AVI, "09 תחילת ליווי יאיר c1"),
+                                msg("09:30", AVI, "29 ליווי יאיר למחסן"),
+                                msg("09:45", AVI, "44 סיום ליווי יאיר")])
+    assert [(r.comment, hm(r.start), hm(r.end)) for r in rows_of(res, ESCORT)] == \
+        [("Escort C1 : Yair Lev", "09:09", "09:29")]
+    assert any(i.kind == "escort_not_needed" for i in res.issues)

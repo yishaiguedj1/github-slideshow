@@ -76,7 +76,7 @@ class Builder:
         self._segments = self._escort_segments(evs, res)
         rows += self._scan_rows(evs, res)
         rows += self._check_rows(evs, res)
-        rows += self._escort_rows(self._segments)
+        rows += self._escort_rows(self._segments, res)
         self._mark_missing_zone(evs, rows)
         roster = self._roster(day, evs, res, roster_override)
         res.roster = roster
@@ -561,10 +561,18 @@ class Builder:
                     a["notes"].append(f"מיקום הליווי ({b['loc']}) נלקח מהמשך הליווי")
         return segments
 
-    def _escort_rows(self, segments: list[dict]) -> list[Row]:
+    def _escort_rows(self, segments: list[dict], res: DayResult | None = None) -> list[Row]:
         rows = []
         for seg in sorted(segments, key=lambda x: (x["start"] or 0, x["events"][0].msg.ts)):
             p, loc, s, e = seg["person"], seg["loc"], seg["start"], seg["end"]
+            zones = self.ref.escort_zones(p)
+            if zones and loc and loc not in zones:
+                # the logistics team is escorted only in C1 / C2
+                if res is not None:
+                    res.issues.append(Issue(seg["events"][0].day, "escort_not_needed",
+                                            f"ליווי של {p} ב-{loc} לא נרשם (ליווי רק ב-{'/'.join(zones)})",
+                                            sources=[x.msg for x in seg["events"]]))
+                continue
             if s is not None and e is not None and e <= s:
                 s = e - int(self.s.get("times.single_minute", 1))   # "06 תחילת ליווי ... 06 סיום"
             name = None if p.startswith("?") else p

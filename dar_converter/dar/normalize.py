@@ -55,7 +55,7 @@ class Reference:
         for p in data.get("people", []) or []:
             ref.people[p["name"]] = {"aliases": [str(a) for a in p.get("aliases", [])],
                                      "escort": bool(p.get("escort", True))}
-            for key in ("default_location", "default_minutes"):
+            for key in ("default_location", "default_minutes", "escort_zones"):
                 if p.get(key):
                     ref.people[p["name"]][key] = p[key]
         ref.senders = {str(k): v for k, v in (data.get("senders") or {}).items()}
@@ -79,7 +79,8 @@ class Reference:
             "senders": dict(self.senders),
             "people": [{"name": n, "aliases": v["aliases"],
                         **({"escort": False} if v.get("escort") is False else {}),
-                        **({k: v[k] for k in ("default_location", "default_minutes") if v.get(k)})}
+                        **({k: v[k] for k in ("default_location", "default_minutes", "escort_zones")
+                            if v.get(k)})}
                        for n, v in self.people.items()],
             "locations": self.locations,
         }
@@ -140,6 +141,15 @@ class Reference:
 
     def default_location(self, person: str) -> str | None:
         return self.people.get(person, {}).get("default_location")
+
+    def is_employee(self, person: str | None) -> bool:
+        """An employee who needs no escort - and may escort contractors himself."""
+        return person in self.people and self.people[person].get("escort", True) is False
+
+    def escort_zones(self, person: str | None) -> list[str] | None:
+        """Places where the person needs an escort (the logistics team: only C1 / C2)."""
+        z = self.people.get(person, {}).get("escort_zones")
+        return [str(x) for x in z] if z else None
 
     def default_minutes(self, person: str) -> int | None:
         """Usual length of the person's visit (the cleaner: about an hour), used when no exit

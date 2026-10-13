@@ -96,6 +96,11 @@ has them. The container is deleted when the session ends.
 - The cleaner's escort with no exit report ends an hour after she came in, with a cell note
   (`default_minutes` in the reference). Her comment uses her name as written in the reference.
 - Officers who left the team have a `left` date in the reference and are not matched after it.
+- Employees who need no escort (`escort: false`) may escort contractors themselves; an escort
+  line that names such an employee is their escort and is not written. Only escorts done by
+  the security team are written.
+- People with `escort_zones` (the logistics team) are escorted only there (C1 / C2); their
+  escorts elsewhere are not written (listed as a day note in the review file).
 - Unclear fields stay empty and the row is marked red. Minute-level precision is not critical;
   a clean, readable sheet is.
 - Output: a separate copy of the month's official sheet in the user's Drive (never the

@@ -238,7 +238,6 @@ def test_check_on_the_way_to_the_storage(extractor):
     assert [(e.kind, hm(e.end)) for e in evs] == [("check", "13:45"), ("escort_start", "13:45")]
 
 
-def test_employee_who_comes_along_is_not_escorted(extractor):
-    e = one(extractor, msg("11:24", AVI, "23-רון נכנס עם תום לc2"))
-    assert (e.kind, e.subjects) == ("escort_start", ["Ron Shani"])
-    assert one(extractor, msg("10:44", AVI, "37 תחילת ליווי תום c2")).subjects == ["Tom Ben"]
+def test_escort_done_by_an_employee_is_not_written(extractor):
+    assert one(extractor, msg("11:24", AVI, "23-רון נכנס עם תום לc2")).kind == "ignore"
+    assert one(extractor, msg("10:44", AVI, "37 תחילת ליווי תום c2")).kind == "ignore"

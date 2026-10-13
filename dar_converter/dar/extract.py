@@ -467,15 +467,26 @@ class Extractor:
 
     def _escort(self, msg, line, toks, exprs, zone, location, hour_ctx, sender_officer,
                 has_check_noun, ev, dest=None) -> list[Event]:
+        out = self._escort_events(msg, line, toks, exprs, zone, location, hour_ctx,
+                                  sender_officer, has_check_noun, ev, dest)
+        # an employee may escort contractors himself ("37 תחילת ליווי תום c2",
+        # "רון נכנס עם תום לc2"): only escorts done by the security team are written
+        for i, e in enumerate(out):
+            emp = [p for p in e.subjects if self.ref.is_employee(p)]
+            if e.kind.startswith("escort") and emp:
+                out[i] = Event("ignore", msg, line, day=e.day,
+                               notes=[f"ליווי של העובד {emp[0]} - לא נרשם ב-DAR"])
+        return out
+
+    def _escort_events(self, msg, line, toks, exprs, zone, location, hour_ctx, sender_officer,
+                       has_check_noun, ev, dest=None) -> list[Event]:
         orig = toks
         toks = self._escorted_namesakes(toks)
         kinds = [t[1] for t in toks]
         people = [t[2] for t in toks if t[1] in ("person", "unknown_name")]
         if not people and "all" in kinds:
             people = ["*"]                                   # "סיום ליווי לכולם"
-        needy = [p for p in people if self.ref.needs_escort(p) is not False]
-        if needy and len(needy) < len(people):
-            people = needy                    # "רון נכנס עם תום לc2": the employee comes along
+
         officers = [t[2] for t in toks if t[1] == "officer"]
         out: list[Event] = []
         where = dest or zone or location

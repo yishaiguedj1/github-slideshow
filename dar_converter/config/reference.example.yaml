@@ -44,6 +44,9 @@ people:
   - name: Tom Ben                 # employee - no escort
     aliases: [תום]
     escort: false
+  - name: Yair Lev                # logistics team: escorted only in C1 / C2
+    aliases: [יאיר]
+    escort_zones: [C1, C2]
   - name: Mira Katz
     aliases: [מירה, המנקה]
     default_location: Office
