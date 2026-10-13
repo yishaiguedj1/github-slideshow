@@ -365,7 +365,7 @@ class Builder:
         for c in sorted([e for e in evs if e.kind == "check" and not e.used], key=_tkey):
             subjects = c.subjects or [None]
             for i, subj in enumerate(subjects):
-                zone = c.zone
+                zone = c.zone if c.zone in ZONES else None     # a check is always C1 / C2
                 row_notes = []
                 if zone is None and subj:
                     zone, how = self._zone_from_context(subj, c, evs)
@@ -444,6 +444,8 @@ class Builder:
 
         for ev in stream:
             if ev.kind == "check":
+                if ev.zone not in (None, *ZONES):
+                    continue                  # "ליווי רון למחסן + בדיקה": checked on the way there
                 for p in ev.subjects:
                     o = open_.get(p)
                     if not o or ev.end is None or ev.end < o["start"]:

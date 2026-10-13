@@ -192,6 +192,8 @@ class Extractor:
         self.scan_minutes = scan_minutes      # average scan when only one time is given
         self.loc_patterns = location_patterns(ref)
         self._signature: str | None = None
+        self._anchor = None
+        self._anchor_day = None
         self._on = None              # date of the message: officers who left are not matched
 
     # ------------------------------------------------------------ public API
@@ -201,6 +203,7 @@ class Extractor:
         events: list[Event] = []
         hour_ctx: int | None = None
         self._anchor = None          # explicit "HH:MM" seen earlier in this message
+        self._anchor_day = None      # ... and the day it was given to
         self._on = msg.ts.date()
         sender_officer = self.ref.sender_officer(msg.sender)
         for raw in msg.text.split("\n"):
@@ -222,12 +225,32 @@ class Extractor:
             evs = self.extract_line(msg, line, line_hour, sender_officer)
             for e in evs:
                 if getattr(e, "_explicit_hour", False) and e.end is not None:
-                    self._anchor = e.end
+                    self._anchor, self._anchor_day = e.end, e.day
+            if len(evs) == 1 and evs[0].kind == "check" and not evs[0].subjects and events \
+                    and events[-1].kind.startswith("escort") and events[-1].subjects \
+                    and events[-1].msg is msg:
+                evs = [self._check_of_escorted(msg, line, evs[0], events[-1])]
             if len(evs) == 1 and evs[0].kind in ("unknown", "chatter") and events:
                 if self._continue_list(msg, line, events, line_hour):
                     continue
             events.extend(evs)
         return events
+
+    @staticmethod
+    def _check_of_escorted(msg: Message, line: str, c: Event, esc: Event) -> Event:
+        """"41 ליווי רון למחסן" + "+ בדיקה": the escorted people were checked then."""
+        e = Event("check", msg, line, day=esc.day, zone=c.zone or esc.zone,
+                  actor=c.actor or esc.actor, subjects=[p for p in esc.subjects if p != "*"])
+        no_time = "בדיקה בלי שעה - נלקחה שעת שליחת ההודעה" in c.notes
+        if no_time and esc.start is not None:
+            e.start, e.end = esc.start - 1, esc.start
+        else:
+            e.start, e.end = c.start, c.end
+        e.single_time = True
+        for n in c.notes:
+            if n not in ("לא צוין את מי בדקו", "בדיקה בלי שעה - נלקחה שעת שליחת ההודעה"):
+                e.note(n, MEDIUM)
+        return e
 
     def _continue_list(self, msg: Message, line: str, events: list[Event],
                        hour_ctx: int | None) -> bool:
@@ -450,6 +473,9 @@ class Extractor:
         people = [t[2] for t in toks if t[1] in ("person", "unknown_name")]
         if not people and "all" in kinds:
             people = ["*"]                                   # "סיום ליווי לכולם"
+        needy = [p for p in people if self.ref.needs_escort(p) is not False]
+        if needy and len(needy) < len(people):
+            people = needy                    # "רון נכנס עם תום לc2": the employee comes along
         officers = [t[2] for t in toks if t[1] == "officer"]
         out: list[Event] = []
         where = dest or zone or location
@@ -500,6 +526,10 @@ class Extractor:
                 st = ev("escort_start", zone=where, actor=sender_officer, subjects=[escorted],
                         start=chk.start, end=chk.start, day=chk.day)
                 if "start" in kinds:
+                    return [chk, st]
+                if not (exprs and exprs[0].is_range):
+                    # "45 ליווי רון למחסן + בדיקה": checked on the way, escorted from then on
+                    st.start = st.end = chk.end
                     return [chk, st]
                 if chk.start is not None and chk.end is not None and chk.end - chk.start > 2:
                     chk.start = chk.end - 1          # a long escort: the exit check is the last minute
@@ -705,6 +735,7 @@ class Extractor:
         # next minutes ("50 תחילת ליווי" edited into a message sent at :47)
         tol = max(self.tol, 15) if msg.edited else self.tol
         end_m = x.m2 if x.is_range else x.m1
+        anchored_day = None
         # ---- end time
         if x.h2 is not None:
             end = x.h2 * 60 + end_m
@@ -716,13 +747,16 @@ class Extractor:
             end = hour_ctx * 60 + end_m
             if x.is_range and end_m < x.m1:
                 end += 60
-        elif getattr(self, "_anchor", None) is not None and \
-                (self._anchor // 60) * 60 + end_m <= t_msg + tol + 60:
+        elif getattr(self, "_anchor", None) is not None and (
+                self._anchor_day not in (None, msg.ts.date())
+                or (self._anchor // 60) * 60 + end_m <= t_msg + tol + 60):
             # "11:30 בדיקה לרון c1 / 25-28 גיל סרק c1" -> same hour as the explicit time
             end = (self._anchor // 60) * 60 + end_m
             if end < self._anchor - 30:
                 end += 60
-            if end > t_msg + tol:
+            if self._anchor_day not in (None, msg.ts.date()):
+                anchored_day = self._anchor_day      # the rest of yesterday's evening report
+            elif end > t_msg + tol:
                 end -= 60
         else:
             end = (t_msg // 60) * 60 + end_m
@@ -739,9 +773,15 @@ class Extractor:
         else:
             start = end
         # ---- day attribution (late report after midnight, "*של שעה 18:00*" at 00:18)
-        if end > t_msg + tol and (x.h1 is not None or x.h2 is not None or hour_ctx is not None):
+        if anchored_day is not None:
+            e.day = anchored_day
+        elif end > t_msg + tol and (x.h1 is not None or x.h2 is not None or hour_ctx is not None):
             if t_msg < 6 * 60:
                 e.day = msg.ts.date() - timedelta(days=1)
+            elif t_msg < 10 * 60 and end >= 16 * 60:
+                # "18:46-49-c2-..." sent at 07:46: yesterday's last round, reported in the morning
+                e.day = msg.ts.date() - timedelta(days=1)
+                e.note("דיווח של אתמול בערב שנשלח בבוקר", MEDIUM)
             else:
                 e.note("שעה מאוחרת משעת שליחת ההודעה", LOW)
         if end < 0:
@@ -792,8 +832,8 @@ class Extractor:
 
 
 def _strip_prefix(k: str) -> str:
-    """An unknown name keeps its first letter unless it is ל / ו ("לניר", "וניר"):
-    names such as מתיאס or מיכה start with other prefix letters."""
+    """An unknown name keeps its first letter unless it is ל / ו ("לטל", "וטל"):
+    names such as מאיה or בועז start with other prefix letters."""
     return k[1:] if len(k) > 3 and k[0] in "לו" else k
 
 

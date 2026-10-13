@@ -1,7 +1,7 @@
 from datetime import date
 
 from dar.extract import hour_header
-from tests.conftest import AVI, DANA, GIL, NOA, hm, msg
+from tests.conftest import AVI, DANA, DAY, GIL, NOA, hm, msg
 
 
 def one(extractor, m, kind=None):
@@ -221,3 +221,24 @@ def test_edited_message_may_report_the_next_minutes(extractor):
 
 def test_updated_for_hour_header():
     assert hour_header("מעודכן לשעה 13:00:") == 13
+
+
+def test_yesterdays_evening_reported_in_the_morning(extractor):
+    evs = extractor.extract(msg("07:46", AVI, "18:46-49-c2-נועה סרקה אבי בדק\n50-אבי סרק מחסן\n"
+                                              "49-52-c1-נועה סרקה אבי בדק"))
+    scans = [(e.day.day, hm(e.start), hm(e.end), e.zone) for e in evs if e.kind == "scan"]
+    assert scans == [(DAY.day - 1, "18:46", "18:49", "C2"), (DAY.day - 1, "18:49", "18:52", "C1")]
+
+
+def test_check_on_the_way_to_the_storage(extractor):
+    evs = extractor.extract(msg("12:42", AVI, "41 ליווי רון למחסן\n+ בדיקה"))
+    assert [(e.kind, e.subjects, hm(e.start), hm(e.end)) for e in evs] == [
+        ("escort_start", ["Ron Shani"], "12:41", "12:41"), ("check", ["Ron Shani"], "12:40", "12:41")]
+    evs = extractor.extract(msg("13:47", AVI, "45 ליווי רון למחסן + בדיקה"))
+    assert [(e.kind, hm(e.end)) for e in evs] == [("check", "13:45"), ("escort_start", "13:45")]
+
+
+def test_employee_who_comes_along_is_not_escorted(extractor):
+    e = one(extractor, msg("11:24", AVI, "23-רון נכנס עם תום לc2"))
+    assert (e.kind, e.subjects) == ("escort_start", ["Ron Shani"])
+    assert one(extractor, msg("10:44", AVI, "37 תחילת ליווי תום c2")).subjects == ["Tom Ben"]

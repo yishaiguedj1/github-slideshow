@@ -41,6 +41,9 @@ people:
   - name: Gil Dror                # employee - no escort; shares the alias גיל with officer Gil Amir
     aliases: [גיל]
     escort: false
+  - name: Tom Ben                 # employee - no escort
+    aliases: [תום]
+    escort: false
   - name: Mira Katz
     aliases: [מירה, המנקה]
     default_location: Office

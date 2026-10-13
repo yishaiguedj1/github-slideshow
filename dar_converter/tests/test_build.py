@@ -254,3 +254,13 @@ def test_escort_without_end_closes_at_the_exit_check_in_the_other_zone(ref, sett
 def test_day_without_reports_has_no_assumed_post(ref, settings):
     res = build(ref, settings, [])
     assert res.rows == [] and res.roster == []
+
+
+def test_check_on_the_way_does_not_end_the_storage_escort(ref, settings):
+    res = build(ref, settings, [msg("12:39", AVI, "38 תחילת ליווי רון c2"),
+                                msg("12:42", AVI, "41 ליווי רון למחסן\n+ בדיקה"),
+                                msg("13:05", AVI, "05 סיום ליווי רון במחסן")])
+    esc = [(r.comment, hm(r.start), hm(r.end)) for r in rows_of(res, ESCORT)]
+    assert esc == [("Escort C2 : Ron Shani", "12:38", "12:41"), ("Escort Storage : Ron Shani", "12:41", "13:05")]
+    (chk,) = rows_of(res, SEARCH)
+    assert chk.comment == "Metal screening C2 : Ron Shani - Declined to sit"

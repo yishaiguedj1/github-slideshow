@@ -20,7 +20,7 @@ def test_locations(ref):
     assert ref.location("במחסן") == "Storage"
     assert ref.location("מהמשרס") == "Office"   # typo
     assert ref.location("bldg 7") == "BLDG7"
-    assert ref.location("חיים") is None
+    assert ref.location("שולחן") is None
 
 
 def test_sender_mapping(ref):
