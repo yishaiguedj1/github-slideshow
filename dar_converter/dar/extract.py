@@ -137,7 +137,7 @@ def preclean(line: str) -> str:
     s = _HEBREW_THEN_ZONE.sub(r"\1 \2", s)
     s = _ZONE_THEN_HEBREW.sub(r"\1 ", s)                                  # "C2דנה"
     s = re.sub(r"(תחילת|סיום)(?=[\u0590-\u05FF])", r"\1 ", s)   # "תחילתמליווי" typo
-    s = re.sub(r"(בדיקה|סריקה)(?=[\u0590-\u05FF]{2})", r"\1 ", s)   # "בדיקהמיוחאי"
+    s = re.sub(r"(בדיקה|סריקה)(?=[\u0590-\u05FF]{2})", r"\1 ", s)   # "בדיקהמרון"
     s = re.sub(r"(?<=[\u0590-\u05FF])\d(?=[\u0590-\u05FF])", "§", s)    # "מנ1ה": typo letter
     if re.match(r"\s*\d", s):                                            # "סרקה דנה בדק0"
         s = re.sub(r"(?<=[\u0590-\u05FF])\d[\u0590-\u05FF]?\s*$", "", s)
