@@ -290,8 +290,8 @@ class Builder:
                 break
 
     def _infer_missing_zone(self, evs: list[Event], res: DayResult) -> None:
-        """A round that reported one zone only: add the other one, as the manual entries do -
-        a lone C2 is followed by C1 (from the C2 end), a lone C1 follows C2 (up to the C1 start)."""
+        """A round that reported one zone only: add the other one right after it (the user's
+        rule: a lone C2 is followed by C1, a lone C1 by C2)."""
         if not self.s.get("rules.infer_missing_zone", False):
             return
         minutes = int(self.s.get("rules.infer_missing_zone_minutes", 3))
@@ -303,7 +303,7 @@ class Builder:
             if any(b.zone == other and (abs(b.start - a.end) <= 15 or abs(a.start - b.end) <= 15)
                    for b in scans):
                 continue
-            start, end = (a.end, a.end + minutes) if a.zone == "C2" else (a.start - minutes, a.start)
+            start, end = a.end, a.end + minutes
             e = Event("scan", a.msg, a.line, day=a.day, start=start, end=end, zone=other,
                       actor=a.actor, partner=a.partner, confidence=a.confidence, inferred=True)
             e.info.append(f"{other} לא דווח בסבב - נוסף אוטומטית ({minutes} דק')")

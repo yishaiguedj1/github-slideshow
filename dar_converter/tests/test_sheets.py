@@ -21,7 +21,8 @@ def test_merge_keeps_other_rows_and_replaces_ours(ref, settings):
 
 
 def test_plan_ranges_badges_and_fix_formatting(ref, settings):
-    res = day(ref, settings, [msg("13:51", NOA, "48-51 אבי סרק נועה בדקה c2")])   # only C2 -> fix
+    res = day(ref, settings, [msg("13:51", NOA, "48-51 אבי סרק נועה בדקה c2\n"
+                                               "49 תחילת ליווי צביקה במשרד")])   # unknown name -> fix
     plan = build_plan([res], settings, {"08/05": [["", "", "", "", "", "", ""]] * 3}, "%m/%d")
     (tab,) = plan["tabs"]
     assert tab["tab"] == "08/05"

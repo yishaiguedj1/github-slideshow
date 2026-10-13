@@ -31,15 +31,16 @@ rules:
   join_mode: auto              # auto: gap 1 -> C1 starts at C2 end, gap 2-3 -> boundary C2 end + 1
                                # also: c1_starts_at_c2_end | c2_ends_at_c1_start
   infer_missing_zone: true     # a round that reported one zone only: add the other one (no mark)
-  infer_missing_zone_minutes: 3  # lone C2 -> C1 from its end; lone C1 -> C2 up to its start
+  infer_missing_zone_minutes: 3  # the missing zone starts where the reported one ended
   merge_scan_and_check_gap: 0  # 0 = keep "37-40 X סרק" and "43 בדיקה לX" as separate rows
   busy_checker_last_minute: false  # checker busy during the scan -> search = last minute
   escort_start_without_time: message_time
 
 roster:
-  default_supervisor: null          # Shift 1 when no supervisor shows up in the chat:
-                                    # null = an empty Shift 1 row marked for a fix (the user's choice),
-                                    # auto = the first supervisor of the reference
+  default_supervisor: auto          # Shift 1 when no supervisor shows up in the chat (or the
+                                    # other supervisor scans like a guard): auto = the first
+                                    # supervisor of the reference, with a cell note (the user's
+                                    # choice); null = an empty Shift 1 row marked for a fix
   supervisor_max_scans: 11           # a supervisor who scans more than this acts as a guard
 
 badges:                        # header cells C4 / C5 on days with activity (null = leave empty)

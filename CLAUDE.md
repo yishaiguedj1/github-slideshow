@@ -86,11 +86,13 @@ has them. The container is deleted when the session ends.
   one reported time takes 2 minutes. A scan with one reported time takes 3 minutes.
 - Shift 1 is the supervisor; posts come from the hours each officer reported (07-13 / 13-19 /
   full day); Shift 2 / Shift 3 follow the fixed order of `shift_priority`; holiday eves end
-  at 14:00 (`config/settings.yaml` -> `day.holidays`). A day with no supervisor in the chat
-  gets an empty Shift 1 row marked red (the user fills it in).
-- A round that reported only one zone gets the other zone added, without a mark: a lone C2 is
-  followed by C1 (3 minutes from its end), a lone C1 follows C2 - unless another officer
-  scanned that zone within 15 minutes. The review file lists every added row.
+  at 14:00 (`config/settings.yaml` -> `day.holidays`). The first supervisor of the reference
+  always has priority for Shift 1: when he appears in the chat the other supervisor is not
+  Shift 1 (except the afternoon after he left at 13:00); when nobody supervisor-like reports,
+  or the other supervisor scans like a guard, he is Shift 1 by default (cell note, not red).
+- A round that reported only one zone gets the other zone added right after it, without a
+  mark (3 minutes from the reported zone's end), unless another officer scanned that zone
+  within 15 minutes. The review file lists every added row.
 - The cleaner's escort with no exit report ends an hour after she came in, with a cell note
   (`default_minutes` in the reference). Her comment uses her name as written in the reference.
 - Officers who left the team have a `left` date in the reference and are not matched after it.

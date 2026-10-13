@@ -115,17 +115,19 @@ def test_supervisor_is_shift_1_and_others_by_priority(ref, settings):
     assert res.rows[0].action == ASSUMED_POST and res.rows[0].d_e_f[0] == 7 * 3600
 
 
-def test_no_supervisor_in_chat_leaves_a_red_shift_1(ref, settings):
+def test_no_supervisor_in_chat_gets_the_default_supervisor(ref, settings):
     msgs = [msg("07:46", NOA, "39-42 אבי סרק נועה בדקה c2"),
             msg("17:46", NOA, "39-42 אבי סרק נועה בדקה c2")]
-    res = build(ref, settings, msgs)                  # default_supervisor: null
+    res = build(ref, settings, msgs)                  # default_supervisor: auto
+    ap = rows_of(res, ASSUMED_POST)
+    assert [(r.shift, r.officer) for r in ap] == [("Shift 1", "Dana Cohen"), ("Shift 2", "Avi Levi"),
+                                                   ("Shift 3", "Noa Bar")]
+    assert ap[0].flags and not ap[0].fix              # a cell note, not red
+    res = build(ref, settings, msgs, {"roster": {"default_supervisor": None}})
     ap = rows_of(res, ASSUMED_POST)
     assert [(r.shift, r.officer) for r in ap] == [("Shift 1", None), ("Shift 2", "Avi Levi"),
                                                    ("Shift 3", "Noa Bar")]
-    assert ap[0].fix and not ap[1].fix and any(i.kind == "no_supervisor" for i in res.issues)
-    res = build(ref, settings, msgs, {"roster": {"default_supervisor": "auto"}})
-    ap = [(r.shift, r.officer) for r in rows_of(res, ASSUMED_POST)]
-    assert ap == [("Shift 1", "Dana Cohen"), ("Shift 2", "Avi Levi"), ("Shift 3", "Noa Bar")]
+    assert ap[0].fix and any(i.kind == "no_supervisor" for i in res.issues)
 
 
 def test_namesake_employee_vs_officer(ref, settings):
@@ -174,10 +176,10 @@ def test_round_with_one_zone_gets_the_other_zone(ref, settings):
                    (SEARCH, "13:48", "13:51", ms.format("C2"), False),
                    (PATROL, "13:51", "13:54", "Routine Patrol", True),
                    (SEARCH, "13:51", "13:54", ms.format("C1"), True),
-                   (PATROL, "15:15", "15:18", "Routine Patrol", True),
-                   (SEARCH, "15:15", "15:18", ms.format("C2"), True),
                    (PATROL, "15:18", "15:21", "Routine Patrol", False),
-                   (SEARCH, "15:18", "15:21", ms.format("C1"), False)]
+                   (SEARCH, "15:18", "15:21", ms.format("C1"), False),
+                   (PATROL, "15:21", "15:24", "Routine Patrol", True),
+                   (SEARCH, "15:21", "15:24", ms.format("C2"), True)]
     assert not any(r.fix or r.flags for r in res.rows if r.inferred)       # added without a mark
 
 
